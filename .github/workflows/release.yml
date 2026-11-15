@@ -8,7 +8,7 @@
 # CRITICAL vulnerability stops the release. Its summary goes into the release notes, and
 # the full reports plus CycloneDX SBOMs are attached as security-reports.zip.
 #
-# Needed repository secrets (see README, "Releases"):
+# Needed repository secrets (see DEVELOPMENT.md, "Releases and CI"):
 #   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD
 name: Release
 
@@ -157,7 +157,7 @@ jobs:
               -storepass dry-run-only -keypass dry-run-only
             echo "DERUST_KEYSTORE_PASSWORD=dry-run-only" >> "$GITHUB_ENV"
           else
-            echo "::error::Secret ANDROID_KEYSTORE_BASE64 is missing: create the key with 'make release-key' and add it (README, Releases)."
+            echo "::error::Secret ANDROID_KEYSTORE_BASE64 is missing: create the key with 'make release-key' and add it (DEVELOPMENT.md, Releases and CI)."
             exit 1
           fi
       - name: Build

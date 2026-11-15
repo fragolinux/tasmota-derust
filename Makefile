@@ -9,7 +9,7 @@
 #   make package       release archives of whatever is in dist/ -> dist/release/
 #   make scan          Trivy vulnerability scan of the built artifacts -> dist/security/
 #   make sizes         list what is in dist/
-#   make release-key   create the APK signing key (once; see README)
+#   make release-key   create the APK signing key (once; see DEVELOPMENT.md)
 #   make lock-android  refresh android/app/gradle.lockfile after changing Android dependencies
 #   make check-tools   what is missing on this computer
 #   make clean         remove dist/ (cargo's target/ is left alone)

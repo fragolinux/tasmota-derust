@@ -9,4 +9,4 @@ as are the usual ones about dependencies and the web server.
 
 Every push is checked with Trivy (dependencies and committed secrets), and every release is
 scanned again on the finished files before it is published: see `security-reports.zip` in
-each release and "Releases and CI" in the README.
+each release and "Releases and CI" in DEVELOPMENT.md.
