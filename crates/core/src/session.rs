@@ -33,6 +33,7 @@ pub struct Session {
     app_latest: Arc<Mutex<Latest>>,
     read_only: AtomicBool,
     broker: String,
+    notify: Notify,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +48,9 @@ pub enum CommandError {
     UpgradeNotPossible,
     NotOfficialOtaUrl,
     NotALight,
+    /// SetOption value refused: it would cut the device off from this app.
+    OptionBlocked,
+    BadOption,
 }
 
 impl CommandError {
@@ -66,6 +70,10 @@ impl CommandError {
                 "The OtaUrl is not an official release or development URL."
             }
             CommandError::NotALight => "This device has no light that can do this.",
+            CommandError::OptionBlocked => {
+                "This value would cut the device off from this app: change it from the device's web UI or console."
+            }
+            CommandError::BadOption => "No such SetOption, or value out of range.",
         }
     }
 }
@@ -147,7 +155,8 @@ impl Session {
             mqtt,
             latest: github::fetch_latest(notify.clone()),
             latest_dev: github::fetch_latest_dev(notify.clone()),
-            app_latest: github::fetch_app_latest(notify),
+            app_latest: github::fetch_app_latest(notify.clone()),
+            notify,
             read_only: AtomicBool::new(read_only),
             broker: format!("{}:{}", broker.host.trim(), broker.port),
         }
@@ -352,6 +361,37 @@ impl Session {
         Ok(())
     }
 
+    /// The SetOptions of a device, decoded and described (descriptions are downloaded the
+    /// first time). None for an unknown device.
+    pub fn options(&self, topic: &str) -> Option<crate::setoption::OptionsView> {
+        crate::setoption::load_texts(self.notify.clone());
+        let s = self.shared.lock().unwrap();
+        let d = s.store.devices.get(topic)?;
+        Some(crate::setoption::view(&d.set_options))
+    }
+
+    /// `SetOption<n> <value>`, then `Status 3` to read the options back. Values that would
+    /// cut the device off from this app (MQTT or Wi-Fi off) are refused.
+    pub fn set_option(&self, topic: &str, n: u16, value: u32) -> Result<(), CommandError> {
+        let payload = crate::setoption::validate(n, value).map_err(|_| {
+            if crate::setoption::blocked(n, value).is_some() {
+                CommandError::OptionBlocked
+            } else {
+                CommandError::BadOption
+            }
+        })?;
+        let actions = {
+            let s = self.shared.lock().unwrap();
+            self.guard(&s, topic)?;
+            [
+                s.store.command(topic, &format!("SETOPTION{n}"), &payload),
+                s.store.command(topic, "STATUS", "3"),
+            ]
+        };
+        run_actions(&self.mqtt, actions.into_iter().flatten().collect());
+        Ok(())
+    }
+
     fn targets(&self) -> crate::ota::Targets {
         let get = |l: &Mutex<Latest>| match &*l.lock().unwrap() {
             Latest::Ok(v) => Some(v.clone()),
@@ -440,6 +480,8 @@ pub struct DeviceInfo {
     pub ota_channel: &'static str,
     /// The OtaUrl can be switched to the other channel.
     pub can_switch_channel: bool,
+    /// The device reported its SetOptions (see `Session::options`).
+    pub has_options: bool,
 }
 
 /// A light, as the front ends draw it.
@@ -566,6 +608,7 @@ impl DeviceInfo {
             }),
             up_to_date,
             upgrade_plan,
+            has_options: !d.set_options.is_empty(),
             upgrade: d.upgrade.as_ref().map(|u| {
                 let (state, text) = match &u.phase {
                     UpgradePhase::Sent => ("sent", "Command sent…".to_string()),

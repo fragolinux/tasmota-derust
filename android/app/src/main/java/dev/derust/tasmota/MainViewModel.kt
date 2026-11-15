@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.derust.tasmota.core.Broker
 import dev.derust.tasmota.core.CommandException
+import dev.derust.tasmota.core.Options
 import dev.derust.tasmota.core.Session
 import dev.derust.tasmota.core.Snapshot
 import kotlinx.coroutines.Dispatchers
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -50,6 +52,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** Device whose SetOptions screen is open. */
+    private val _optionsTopic = MutableStateFlow<String?>(null)
+    val optionsTopic: StateFlow<String?> = _optionsTopic.asStateFlow()
+
+    /** SetOptions of [optionsTopic], polled while the screen is open. */
+    val options: StateFlow<Options?> = combine(session, _optionsTopic) { s, t -> s to t }
+        .flatMapLatest<Pair<Session?, String?>, Options?> { (s, t) ->
+            if (s == null || t == null) flowOf(null) else flow {
+                while (true) {
+                    emit(runCatching { s.options(t) }.getOrNull())
+                    delay(1000)
+                }
+            }
+        }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun openOptions(topic: String?) {
+        _optionsTopic.value = topic
+    }
 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages = _messages.asSharedFlow()
@@ -137,6 +160,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setChannel(topic: String, development: Boolean) =
         command(if (development) "OtaUrl: development builds" else "OtaUrl: releases") { it.setChannel(topic, development) }
+
+    /** `SetOption<n> <value>`; the options are read back afterwards. */
+    fun setOption(topic: String, n: Int, value: Long) =
+        command("SetOption$n $value sent") { it.setOption(topic, n.toUShort(), value.toUInt()) }
 
     /** Tells the user that read-only is on (used before asking for a confirmation, too). */
     fun readOnlyHit() {

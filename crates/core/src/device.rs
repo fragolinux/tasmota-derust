@@ -140,6 +140,8 @@ pub struct Device {
     /// Dimmable / CCT / RGB light, when the device reports one.
     pub light: Option<crate::light::Light>,
     pub upgrade: Option<Upgrade>,
+    /// `StatusLOG.SetOption` registers (see `setoption::decode`); empty until reported.
+    pub set_options: Vec<String>,
 }
 
 impl Device {
@@ -414,6 +416,17 @@ impl Device {
             set_str(&mut self.gateway, s, "Gateway");
             set_str(&mut self.mac, s, "Mac");
         }
+        if let Some(regs) = v
+            .get("StatusLOG")
+            .and_then(|s| s.get("SetOption"))
+            .and_then(Value::as_array)
+        {
+            self.set_options = regs
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+        }
         if let Some(s) = v.get("StatusMQT") {
             set_str(&mut self.mqtt_client, s, "MqttClient");
             set_i64(&mut self.mqtt_count, s, "MqttCount");
@@ -495,6 +508,14 @@ impl Device {
         }
         // Answer to "OtaUrl <url>".
         set_str(&mut self.ota_url, v, "OtaUrl");
+        // Answer to "SetOption<n> <value>".
+        if let Some(o) = v.as_object() {
+            for (k, val) in o {
+                if let Some((n, value)) = crate::setoption::parse_answer(k, val) {
+                    crate::setoption::apply(&mut self.set_options, n, value);
+                }
+            }
+        }
         // Some firmware answers Status commands with RESULT.
         self.parse_status(v);
     }
@@ -707,9 +728,15 @@ impl Store {
                     d.parse_status(v)
                 }
             }
-            (false, s) if s.starts_with("POWER") => {
+            (false, s) if s.starts_with("POWER") && json.is_none() => {
                 let idx = s[5..].parse::<usize>().unwrap_or(1).saturating_sub(1);
                 d.set_power(idx, payload.trim());
+            }
+            // SetOption4 1: answers on stat/<topic>/<COMMAND> instead of RESULT.
+            (false, _) => {
+                if let Some(v) = &json {
+                    d.parse_result(v, &mut self.ssids)
+                }
             }
             _ => {}
         }
@@ -1120,6 +1147,29 @@ mod tests {
 
     fn long_ago(d: Duration) -> Instant {
         Instant::now().checked_sub(d).unwrap()
+    }
+
+    #[test]
+    fn set_options_from_status_and_answers() {
+        let mut s = Store::default();
+        s.handle("tele/plug/LWT", "Online");
+        s.handle(
+            "stat/plug/STATUS3",
+            r#"{"StatusLOG":{"SerialLog":2,"SetOption":["00008009","2805C80001000600003C5A0A190000000000","00000000","00000000"]}}"#,
+        );
+        assert_eq!(s.devices["plug"].set_options.len(), 4);
+        s.handle("stat/plug/RESULT", r#"{"SetOption4":"ON"}"#);
+        // SetOption4 1: the next answers arrive on stat/plug/<COMMAND>.
+        s.handle("stat/plug/SETOPTION34", r#"{"SetOption34":100}"#);
+        s.handle("stat/plug/POWER", r#"{"POWER":"ON"}"#);
+        let d: std::collections::HashMap<u16, u32> =
+            crate::setoption::decode(&s.devices["plug"].set_options)
+                .into_iter()
+                .collect();
+        assert_eq!((d[&4], d[&34]), (1, 100));
+        assert_eq!(s.devices["plug"].power, vec![Some(true)]);
+        s.handle("stat/plug/POWER", "OFF");
+        assert_eq!(s.devices["plug"].power, vec![Some(false)]);
     }
 
     #[test]

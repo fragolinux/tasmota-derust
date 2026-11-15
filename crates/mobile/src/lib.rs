@@ -33,6 +33,8 @@ pub enum CommandError {
     UpgradeNotPossible,
     NotOfficialOtaUrl,
     NotALight,
+    OptionBlocked,
+    BadOption,
 }
 
 impl CommandError {
@@ -49,6 +51,8 @@ impl CommandError {
             CommandError::UpgradeNotPossible => E::UpgradeNotPossible,
             CommandError::NotOfficialOtaUrl => E::NotOfficialOtaUrl,
             CommandError::NotALight => E::NotALight,
+            CommandError::OptionBlocked => E::OptionBlocked,
+            CommandError::BadOption => E::BadOption,
         }
     }
 }
@@ -75,6 +79,8 @@ impl From<session::CommandError> for CommandError {
             E::UpgradeNotPossible => CommandError::UpgradeNotPossible,
             E::NotOfficialOtaUrl => CommandError::NotOfficialOtaUrl,
             E::NotALight => CommandError::NotALight,
+            E::OptionBlocked => CommandError::OptionBlocked,
+            E::BadOption => CommandError::BadOption,
         }
     }
 }
@@ -138,6 +144,8 @@ pub struct Device {
     /// "release", "development" or "custom": what the OtaUrl points at.
     pub ota_channel: String,
     pub can_switch_channel: bool,
+    /// The device reported its SetOptions.
+    pub has_options: bool,
     pub light: Option<Light>,
 }
 
@@ -251,6 +259,7 @@ impl From<session::DeviceInfo> for Device {
                 swatch: l.swatch,
             }),
             can_switch_channel: d.can_switch_channel,
+            has_options: d.has_options,
             up_to_date: d.up_to_date,
             upgrade_plan: UpgradePlan {
                 kind: d.upgrade_plan.kind.to_string(),
@@ -353,6 +362,85 @@ impl Session {
     pub fn set_channel(&self, topic: String, development: bool) -> Result<(), CommandError> {
         Ok(self.inner.set_channel(&topic, development)?)
     }
+
+    /// The SetOptions of a device, decoded and described (the descriptions are downloaded
+    /// the first time: poll again). None for an unknown device.
+    pub fn options(&self, topic: String) -> Option<Options> {
+        let v = self.inner.options(&topic)?;
+        Some(Options {
+            reported: v.reported,
+            texts: v.texts.to_string(),
+            texts_error: v.texts_error,
+            docs: v.docs.to_string(),
+            options: v
+                .options
+                .into_iter()
+                .map(|o| SetOption {
+                    is_default: o.is_default(),
+                    n: o.n,
+                    category: o.category.to_string(),
+                    numeric: o.numeric,
+                    value: o.value,
+                    default_value: o.default,
+                    min: o.min,
+                    max: o.max,
+                    title: o.title,
+                    details: o.details,
+                    risk: match o.risk {
+                        tasmota_derust_core::setoption::Risk::Normal => "normal",
+                        tasmota_derust_core::setoption::Risk::App => "app",
+                        tasmota_derust_core::setoption::Risk::Danger => "danger",
+                    }
+                    .to_string(),
+                    warning: o.warning.map(str::to_string),
+                    blocked_value: o.blocked_value,
+                    blocked_reason: o.blocked_reason.map(str::to_string),
+                    link: o.link,
+                })
+                .collect(),
+        })
+    }
+
+    /// `SetOption<n> <value>`, then the options are read back. MQTT or Wi-Fi off is refused.
+    pub fn set_option(&self, topic: String, n: u16, value: u32) -> Result<(), CommandError> {
+        Ok(self.inner.set_option(&topic, n, value)?)
+    }
+}
+
+/// The SetOptions of one device.
+#[derive(uniffi::Record)]
+pub struct Options {
+    /// The device has reported them.
+    pub reported: bool,
+    /// Descriptions: "loading", "ready" or "failed".
+    pub texts: String,
+    pub texts_error: Option<String>,
+    /// Documentation page of all SetOptions.
+    pub docs: String,
+    /// Ordered by category, then number.
+    pub options: Vec<SetOption>,
+}
+
+#[derive(uniffi::Record)]
+pub struct SetOption {
+    pub n: u16,
+    pub category: String,
+    /// A number (SO32–49) instead of on/off.
+    pub numeric: bool,
+    pub value: u32,
+    pub default_value: Option<u32>,
+    pub is_default: bool,
+    pub min: u32,
+    pub max: u32,
+    pub title: String,
+    pub details: Vec<String>,
+    /// "normal", "app" (changes how apps read the device) or "danger": ask first.
+    pub risk: String,
+    pub warning: Option<String>,
+    /// Value that is refused, and why.
+    pub blocked_value: Option<u32>,
+    pub blocked_reason: Option<String>,
+    pub link: String,
 }
 
 /// Release notes of a Tasmota Derust version ("Changes" part). Blocking: call it off the

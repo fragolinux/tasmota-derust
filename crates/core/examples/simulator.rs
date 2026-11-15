@@ -57,6 +57,8 @@ struct Fake {
     /// Like real Tasmota, after (re)connecting it publishes its LWT before it subscribes to
     /// its command topic: commands arriving before this instant are lost.
     deaf_until: Option<Instant>,
+    /// `StatusLOG.SetOption` registers.
+    set_options: Vec<String>,
 }
 
 const FLASH_KB: i64 = 1000;
@@ -353,6 +355,28 @@ fn devices() -> Vec<Fake> {
                     ct: 300,
                     white: 0,
                     deaf_until: None,
+                    // 6.7.1 reports four registers, current firmware six.
+                    set_options: if topic == "vecchio_interruttore" {
+                        [
+                            "00008009",
+                            "2805C80001000600003C5A0A000000000000",
+                            "00000000",
+                            "00000000",
+                        ]
+                        .map(String::from)
+                        .to_vec()
+                    } else {
+                        [
+                            "00008009",
+                            "2805C80001000600003C5A0A190000000000",
+                            "00000080",
+                            "00006000",
+                            "00006000",
+                            "00000001",
+                        ]
+                        .map(String::from)
+                        .to_vec()
+                    },
                 }
             },
         )
@@ -465,7 +489,14 @@ impl Fake {
             "StatusNET": { "Hostname": format!("{}-1234", self.topic), "IPAddress": self.ip, "Gateway": "10.99.0.1", "Mac": self.mac },
             "StatusMQT": { "MqttHost": "127.0.0.1", "MqttClient": format!("DVES_{}", self.topic), "MqttCount": 1 },
             "StatusSTS": self.state(),
+            "StatusLOG": self.status_log(),
         })
+    }
+
+    fn status_log(&self) -> Value {
+        json!({ "SerialLog": 2, "WebLog": 2, "MqttLog": 0, "SysLog": 0, "LogHost": "", "LogPort": 514,
+                "SSId": [SSIDS[0], SSIDS[1]], "TelePeriod": 15, "Resolution": "558180C0",
+                "SetOption": self.set_options })
     }
 
     fn full_version(&self) -> String {
@@ -615,6 +646,41 @@ fn handle(client: &Client, fakes: &Arc<Mutex<Vec<Fake>>>, topic: &str, cmd: &str
 
     match cmd {
         "STATUS" if payload == "0" => send(stat("STATUS0"), f.status0().to_string()),
+        "STATUS" if payload == "3" => send(
+            stat("STATUS3"),
+            json!({ "StatusLOG": f.status_log() }).to_string(),
+        ),
+        c if c.starts_with("SETOPTION") => {
+            use tasmota_derust_core::setoption;
+            let Ok(n) = c[9..].parse::<u16>() else { return };
+            if n > setoption::MAX_OPTION {
+                return;
+            }
+            if !payload.is_empty() {
+                let v = match payload.to_ascii_uppercase().as_str() {
+                    "ON" => 1,
+                    "OFF" => 0,
+                    p => match p.parse::<u32>() {
+                        Ok(v) => v,
+                        Err(_) => return,
+                    },
+                };
+                setoption::apply(&mut f.set_options, n, v);
+            }
+            let Some(&(_, v)) = setoption::decode(&f.set_options)
+                .iter()
+                .find(|(k, _)| *k == n)
+            else {
+                return;
+            };
+            let key = format!("SetOption{n}");
+            let r = if setoption::is_numeric(n) {
+                json!({ key: v })
+            } else {
+                json!({ key: if v == 1 { "ON" } else { "OFF" } })
+            };
+            send(stat("RESULT"), r.to_string());
+        }
         "MODULE" if payload.is_empty() => send(
             stat("RESULT"),
             json!({ "Module": { "1": f.module } }).to_string(),

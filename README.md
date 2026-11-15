@@ -65,8 +65,9 @@ specifically requested by the user or the person installing or operating it. It 
 connects to the MQTT broker you configure (and to your devices' own web pages when you open
 them), asks GitHub for the version numbers of the latest Tasmota release and development
 build (to mark outdated firmware) and of the latest Tasmota Derust release (to say when a
-newer one is out) and its release notes when you open them, and asks ota.tasmota.com for the size of a firmware image before an
-upgrade step. Nothing about you or your devices is sent anywhere.
+newer one is out) and its release notes when you open them, asks ota.tasmota.com for the size of a firmware image before an
+upgrade step, and downloads the SetOption descriptions from the Tasmota documentation on
+GitHub the first time you open a SetOptions window. Nothing about you or your devices is sent anywhere.
 
 ## Features
 
@@ -97,11 +98,22 @@ upgrade step. Nothing about you or your devices is sent anywhere.
 - **Release / development switch**: one click points a device's OtaUrl at the official
   release builds or at the development builds (same image, ESP8266 and ESP32); the upgrade
   button then shows whether there is something to install.
+- **SetOptions**: the ⚙ next to a device name (on phones: *SetOptions* in the device sheet)
+  lists all its SetOptions, decoded from `Status 3` like Tasmota's `decode-status.py`, grouped
+  by category, with a search box, *Only changed* (from the default), a switch for each on/off
+  option and a number field for SO32–49. Each one is explained (the meaning of each value,
+  the default) and links to the Tasmota documentation. Options that change how apps read the
+  device (SO4, SO19, SO26, SO90) or that can make it misbehave (SO12, SO36, SO65, SO104, TLS…)
+  ask first and say why; turning MQTT (SO3) or Wi-Fi (SO95) off is refused, since it would cut
+  the device off from the app. The descriptions are downloaded from the Tasmota documentation
+  and cached; without internet the options are shown by number. The defaults are those of a
+  freshly flashed current Tasmota (the documentation's, corrected from the firmware source
+  where it is wrong): a device upgraded from old versions can keep older values.
 - Message log panel for troubleshooting.
 - The version at the bottom right opens the list of changes of that release (and of a newer
   one, when it is out).
 - **Read-only mode**, on at every start: only read queries (`Status 0`, `Module`, `SSId1/2`)
-  are sent, and relays, Wi-Fi switching and upgrades are refused. Trying one says that
+  are sent, and relays, Wi-Fi switching, SetOptions and upgrades are refused. Trying one says that
   read-only is on and where to turn it off.
 
 ## Screenshots

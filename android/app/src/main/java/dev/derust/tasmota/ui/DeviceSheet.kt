@@ -71,6 +71,7 @@ fun DeviceSheet(
     onDimmer: (Long) -> Unit,
     onCt: (Long) -> Unit,
     onWhite: (Long) -> Unit,
+    onOptions: () -> Unit,
     /** Read-only mode (app-wide). Commands stay tappable and explain why nothing happens. */
     readOnly: Boolean,
     onReadOnly: () -> Unit,
@@ -122,6 +123,9 @@ fun DeviceSheet(
                     OutlinedButton(onClick = { ask(Confirm.Ap(other)) }, enabled = canCommand) {
                         Text("Switch to SSId $other")
                     }
+                }
+                if (d.hasOptions) {
+                    OutlinedButton(onClick = onOptions) { Text("SetOptions") }
                 }
                 val plan = d.upgradePlan
                 if (!d.upgradeBusy && d.canSwitchChannel) {

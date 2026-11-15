@@ -179,7 +179,23 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             onDimmer = { vm.setDimmer(open.topic, it) },
             onCt = { vm.setCt(open.topic, it) },
             onWhite = { vm.setWhite(open.topic, it) },
+            onOptions = { vm.openOptions(open.topic) },
             readOnly = vm.readOnly,
+            onReadOnly = vm::readOnlyHit,
+        )
+    }
+
+    val optTopic by vm.optionsTopic.collectAsStateWithLifecycle()
+    val opts by vm.options.collectAsStateWithLifecycle()
+    val optDevice = s?.devices?.firstOrNull { it.topic == optTopic }
+    if (optTopic != null && optDevice != null) {
+        OptionsScreen(
+            name = optDevice.name,
+            online = optDevice.online == true,
+            readOnly = vm.readOnly,
+            opts = opts,
+            onClose = { vm.openOptions(null) },
+            onSet = { n, v -> vm.setOption(optDevice.topic, n, v) },
             onReadOnly = vm::readOnlyHit,
         )
     }
@@ -191,9 +207,9 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             text = {
                 Text(
                     if (blocked) {
-                        "Nothing was sent. While read-only is on, relays, Wi-Fi switching and upgrades are blocked."
+                        "Nothing was sent. While read-only is on, relays, Wi-Fi switching, SetOptions and upgrades are blocked."
                     } else {
-                        "Relays, Wi-Fi switching and upgrades will be sent to the devices."
+                        "Relays, Wi-Fi switching, SetOptions and upgrades will be sent to the devices."
                     } + " Read-only turns back on every time the app starts.",
                 )
             },

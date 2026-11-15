@@ -56,6 +56,11 @@ pub fn router(session: Arc<Session>, read_only_hint: &str) -> Router {
         .route("/api/devices/{topic}/hsb/{h}/{s}/{b}", post(api_hsb))
         .route("/api/devices/{topic}/ct/{n}", post(api_ct))
         .route("/api/devices/{topic}/white/{n}", post(api_white))
+        .route("/api/devices/{topic}/options", get(api_options))
+        .route(
+            "/api/devices/{topic}/option/{n}/{value}",
+            post(api_set_option),
+        )
         .with_state(AppState {
             session,
             read_only_hint: read_only_hint.into(),
@@ -210,7 +215,12 @@ fn reply(st: &AppState, r: Result<(), CommandError>) -> Response {
             | CommandError::NotOfficialOtaUrl
             | CommandError::NotALight,
         ) => StatusCode::CONFLICT,
-        Err(CommandError::NoSuchRelay | CommandError::BadAp) => StatusCode::BAD_REQUEST,
+        Err(
+            CommandError::NoSuchRelay
+            | CommandError::BadAp
+            | CommandError::OptionBlocked
+            | CommandError::BadOption,
+        ) => StatusCode::BAD_REQUEST,
     };
     (code, r.unwrap_err().message()).into_response()
 }
@@ -259,6 +269,21 @@ async fn api_channel(
         )
             .into_response(),
     }
+}
+
+/// The SetOptions of a device, decoded and described.
+async fn api_options(State(st): State<AppState>, Path(topic): Path<String>) -> Response {
+    match st.session.options(&topic) {
+        Some(v) => Json(v).into_response(),
+        None => (StatusCode::NOT_FOUND, CommandError::UnknownDevice.message()).into_response(),
+    }
+}
+
+async fn api_set_option(
+    State(st): State<AppState>,
+    Path((topic, n, value)): Path<(String, u16, u32)>,
+) -> Response {
+    reply(&st, st.session.set_option(&topic, n, value))
 }
 
 async fn api_upgrade(State(st): State<AppState>, Path(topic): Path<String>) -> Response {

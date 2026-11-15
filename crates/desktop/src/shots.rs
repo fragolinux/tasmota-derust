@@ -16,6 +16,7 @@ const STEPS: &[&str] = &[
     "log",
     "settings",
     "light",
+    "options",
     "upgrade",
     "changelog",
 ];
@@ -58,6 +59,7 @@ impl DerustApp {
             self.settings_open = false;
             self.log_open = false;
             self.light_open = None;
+            self.options_open = None;
             self.changelog = None;
             if s.step == STEPS.len() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -89,6 +91,14 @@ impl DerustApp {
                             lamp.and_then(|d| Some((d.topic.clone(), d.light.as_ref()?)))
                         {
                             self.light_open = Some((k, LightEdit::from(l)));
+                        }
+                    }
+                }
+                "options" => {
+                    self.cfg.view = View::Home;
+                    if self.options_open.is_none() {
+                        if let Some(d) = self.store.devices.values().find(|d| d.light.is_some()) {
+                            self.handle_actions(vec![UiAction::OpenOptions(d.topic.clone())]);
                         }
                     }
                 }

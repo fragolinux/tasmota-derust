@@ -9,6 +9,7 @@ pub mod light;
 pub mod mqtt;
 pub mod ota;
 pub mod session;
+pub mod setoption;
 
 use std::sync::Arc;
 

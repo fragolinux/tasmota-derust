@@ -16,6 +16,7 @@ use tasmota_derust_core::github::{self, Latest};
 use tasmota_derust_core::light;
 use tasmota_derust_core::mqtt::{Mqtt, MqttEvent};
 use tasmota_derust_core::ota;
+use tasmota_derust_core::setoption::{self, OptionInfo, Risk};
 use tasmota_derust_web::WebServer;
 
 #[cfg(feature = "screenshots")]
@@ -43,6 +44,17 @@ enum Conn {
 enum Confirm {
     Upgrade(String),
     SwitchAp(String, i64),
+    /// Device, option, new value.
+    SetOption(String, u16, u32),
+}
+
+/// SetOption window of one device.
+struct OptionsWindow {
+    key: String,
+    search: String,
+    only_changed: bool,
+    /// Numbers being edited (SO32–49), sent with "Set".
+    drafts: std::collections::HashMap<u16, u32>,
 }
 
 enum UiAction {
@@ -53,6 +65,7 @@ enum UiAction {
     /// Point the OtaUrl at the development (true) or release (false) builds.
     SetChannel(String, bool),
     OpenLight(String),
+    OpenOptions(String),
     Sort(Option<Col>),
 }
 
@@ -73,6 +86,8 @@ struct CellCtx<'a> {
 
 pub struct DerustApp {
     cfg: Config,
+    /// Asks for a repaint (background threads).
+    repaint: tasmota_derust_core::Notify,
     store: Store,
     mqtt: Option<Mqtt>,
     rx: Option<Receiver<MqttEvent>>,
@@ -100,6 +115,7 @@ pub struct DerustApp {
     light_open: Option<(String, LightEdit)>,
     /// Changelog popup: version and its notes (None while loading).
     changelog: Option<(String, ChangelogSlot)>,
+    options_open: Option<OptionsWindow>,
     #[cfg(feature = "screenshots")]
     shots: Option<shots::Shots>,
 }
@@ -109,6 +125,7 @@ impl DerustApp {
         let ctx = cc.egui_ctx.clone();
         let cfg = Config::load();
         let mut app = Self {
+            repaint: repaint(&ctx),
             draft: cfg.broker.clone(),
             cfg,
             store: Store::default(),
@@ -131,6 +148,7 @@ impl DerustApp {
             notice: None,
             changelog: None,
             light_open: None,
+            options_open: None,
             #[cfg(feature = "screenshots")]
             shots: shots::Shots::from_env(),
         };
@@ -324,8 +342,7 @@ impl DerustApp {
                 )
                 .on_disabled_hover_text("Configure the MQTT broker first");
             if let Some(e) = &self.web_error {
-                ui.label(RichText::new("⚠").color(RED))
-                    .on_hover_text(e.as_str());
+                warn_icon(ui, RED).on_hover_text(e.as_str());
             }
             if start.clicked() {
                 self.start_web();
@@ -417,6 +434,133 @@ impl DerustApp {
         }
         if open {
             self.light_open = Some((key, edit));
+        }
+    }
+
+    /// `SetOption<n> <v>`, then `Status 3` to read the options back.
+    fn set_option_actions(&self, key: &str, n: u16, v: u32) -> Vec<Action> {
+        match setoption::validate(n, v) {
+            Ok(payload) => [
+                self.store.command(key, &format!("SETOPTION{n}"), &payload),
+                self.store.command(key, "STATUS", "3"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// A change asked from the SetOption window: refused, confirmed first, or sent.
+    fn request_option(&mut self, key: &str, o: &OptionInfo, v: u32) {
+        if let Some(why) = setoption::blocked(o.n, v) {
+            self.show_notice(why);
+        } else if self.read_only {
+            self.show_notice(READ_ONLY_NOTICE);
+        } else if o.risk != Risk::Normal {
+            self.confirm = Some(Confirm::SetOption(key.to_string(), o.n, v));
+        } else {
+            let a = self.set_option_actions(key, o.n, v);
+            self.apply(a);
+        }
+    }
+
+    /// The SetOptions of one device, grouped by category, with search and switches.
+    fn options_window(&mut self, ctx: &egui::Context) {
+        let Some(mut w) = self.options_open.take() else {
+            return;
+        };
+        let Some(d) = self.store.devices.get(&w.key) else {
+            return;
+        };
+        let name = d.display_name().to_string();
+        let online = d.is_online();
+        let view = setoption::view(&d.set_options);
+        let mut open = true;
+        let mut change: Option<(OptionInfo, u32)> = None;
+        let mut refresh = false;
+        egui::Window::new(format!("{name} — SetOptions"))
+            .id(egui::Id::unique("options-window"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([620.0, 560.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut w.search)
+                            .hint_text("Search (number or words)")
+                            .desired_width(240.0),
+                    );
+                    ui.checkbox(&mut w.only_changed, "Only changed from default");
+                    if ui.button("Reload").on_hover_text("Ask the device for its options again").clicked() {
+                        refresh = true;
+                    }
+                });
+                match view.texts {
+                    "loading" if view.options.iter().all(|o| o.title.starts_with("SetOption")) => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Loading the descriptions from the Tasmota documentation…");
+                        });
+                    }
+                    "failed" => {
+                        ui.colored_label(
+                            ORANGE,
+                            "Descriptions not available (no internet?): options are shown by number.",
+                        );
+                    }
+                    _ => {}
+                }
+                if self.read_only {
+                    ui.colored_label(ORANGE, "Read-only mode is on: options can't be changed.");
+                } else if !online {
+                    ui.colored_label(RED, "The device is not online.");
+                }
+                ui.separator();
+                let q = w.search.trim().to_lowercase();
+                let shown: Vec<&OptionInfo> = view
+                    .options
+                    .iter()
+                    .filter(|o| !w.only_changed || !o.is_default())
+                    .filter(|o| o.matches(&q))
+                    .collect();
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    if shown.is_empty() {
+                        ui.label(RichText::new("No option matches.").weak());
+                    }
+                    for cat in setoption::CATEGORIES {
+                        let in_cat: Vec<&&OptionInfo> = shown.iter().filter(|o| o.category == cat).collect();
+                        if in_cat.is_empty() {
+                            continue;
+                        }
+                        egui::CollapsingHeader::new(RichText::new(format!("{cat}  ({})", in_cat.len())).strong())
+                            .id_salt(("so-cat", cat, !q.is_empty() || w.only_changed))
+                            .default_open(!q.is_empty() || w.only_changed || cat == "General")
+                            .show(ui, |ui| {
+                                for o in in_cat {
+                                    if let Some(v) = option_row(ui, o, &mut w.drafts, online && !self.read_only) {
+                                        change = Some(((*o).clone(), v));
+                                    }
+                                    ui.separator();
+                                }
+                            });
+                    }
+                });
+                ui.hyperlink_to("All SetOptions in the Tasmota documentation", view.docs);
+            });
+        let key = w.key.clone();
+        if open {
+            self.options_open = Some(w);
+        }
+        if let Some((o, v)) = change {
+            self.request_option(&key, &o, v);
+        }
+        if refresh {
+            // Status 0 holds the options too, and it is a read query (allowed in read-only).
+            if let Some(a) = self.store.command(&key, "STATUS", "0") {
+                self.apply(vec![a]);
+            }
         }
     }
 
@@ -847,6 +991,15 @@ impl DerustApp {
                         self.light_open = Some((key, LightEdit::from(l)));
                     }
                 }
+                UiAction::OpenOptions(key) => {
+                    setoption::load_texts(self.repaint.clone());
+                    self.options_open = Some(OptionsWindow {
+                        key,
+                        search: String::new(),
+                        only_changed: false,
+                        drafts: Default::default(),
+                    });
+                }
                 UiAction::OpenWeb(url) => {
                     let _ = open::that(url);
                 }
@@ -923,7 +1076,7 @@ impl DerustApp {
     fn confirm_dialog(&mut self, ctx: &egui::Context) {
         let Some(confirm) = &self.confirm else { return };
         let key = match confirm {
-            Confirm::Upgrade(k) | Confirm::SwitchAp(k, _) => k.clone(),
+            Confirm::Upgrade(k) | Confirm::SwitchAp(k, _) | Confirm::SetOption(k, ..) => k.clone(),
         };
         let Some(d) = self.store.devices.get(&key) else {
             self.confirm = None;
@@ -1002,6 +1155,32 @@ impl DerustApp {
                     );
                     "Restart and switch"
                 }
+                Confirm::SetOption(_, n, value) => {
+                    let view = setoption::view(&d.set_options);
+                    let o = view.options.iter().find(|o| o.n == *n);
+                    ui.heading(format!("Change SetOption{n} on {}?", d.display_name()));
+                    ui.add_space(6.0);
+                    if let Some(o) = o {
+                        ui.label(RichText::new(&o.title).strong());
+                        for l in &o.details {
+                            ui.label(RichText::new(l).weak());
+                        }
+                        ui.add_space(6.0);
+                        ui.label(format!(
+                            "From {} to {}.",
+                            option_value_text(o, o.value),
+                            option_value_text(o, *value)
+                        ));
+                        if let Some(w) = o.warning {
+                            ui.add_space(4.0);
+                            ui.colored_label(if o.risk == Risk::Danger { RED } else { ORANGE }, w);
+                        }
+                        ui.hyperlink_to("Documentation", &o.link);
+                    } else {
+                        ui.label(format!("New value: {value}"));
+                    }
+                    "Change"
+                }
             };
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -1046,6 +1225,7 @@ impl DerustApp {
                         .command(&k, "AP", &n.to_string())
                         .into_iter()
                         .collect(),
+                    Some(Confirm::SetOption(k, n, v)) => self.set_option_actions(&k, n, v),
                     None => Vec::new(),
                 };
                 self.apply(actions);
@@ -1082,6 +1262,7 @@ impl eframe::App for DerustApp {
         self.notice_overlay(&ctx);
         self.changelog_window(&ctx);
         self.light_window(&ctx);
+        self.options_window(&ctx);
 
         // Keeps the uptime columns ticking.
         ctx.request_repaint_after(Duration::from_secs(1));
@@ -1233,6 +1414,12 @@ fn signal_icon(ui: &mut egui::Ui, d: &Device) {
 
 fn device_cell(ui: &mut egui::Ui, d: &Device, actions: &mut Vec<UiAction>) {
     signal_icon(ui, d);
+    if !d.set_options.is_empty() {
+        let r = gear_button(ui).on_hover_text("SetOptions");
+        if r.clicked() {
+            actions.push(UiAction::OpenOptions(d.topic.clone()));
+        }
+    }
     let name = d.display_name();
     if let Some(label) = d.offline_label() {
         let why = if label == "No answer" {
@@ -1723,4 +1910,176 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
 fn repaint(ctx: &egui::Context) -> tasmota_derust_core::Notify {
     let ctx = ctx.clone();
     std::sync::Arc::new(move || ctx.request_repaint())
+}
+
+fn option_value_text(o: &OptionInfo, v: u32) -> String {
+    if o.numeric {
+        v.to_string()
+    } else if v == 1 {
+        "ON (1)".into()
+    } else {
+        "OFF (0)".into()
+    }
+}
+
+/// One option: number, description, risk, current value and its control. Returns the new
+/// value when the user changes it.
+fn option_row(
+    ui: &mut egui::Ui,
+    o: &OptionInfo,
+    drafts: &mut std::collections::HashMap<u16, u32>,
+    enabled: bool,
+) -> Option<u32> {
+    let mut out = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(format!("SO{}", o.n)).monospace().weak());
+        match o.risk {
+            Risk::Danger => {
+                warn_icon(ui, RED).on_hover_text(o.warning.unwrap_or(""));
+            }
+            Risk::App => {
+                warn_icon(ui, ORANGE).on_hover_text(o.warning.unwrap_or(""));
+            }
+            Risk::Normal => {}
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.add_enabled_ui(enabled, |ui| {
+                if o.numeric {
+                    let draft = drafts.entry(o.n).or_insert(o.value);
+                    let dirty = *draft != o.value;
+                    if ui.add_enabled(dirty, egui::Button::new("Set")).clicked() {
+                        out = Some(*draft);
+                    }
+                    // The device can hold 0 ("built-in default") below the documented minimum.
+                    ui.add(egui::DragValue::new(draft).range(o.min.min(o.value)..=o.max));
+                } else {
+                    let mut on = o.value == 1;
+                    let blocked = o.blocked_value == Some(if on { 0 } else { 1 });
+                    let r = ui.add(toggle(&mut on));
+                    let r = match (blocked, o.blocked_reason) {
+                        (true, Some(why)) => r.on_hover_text(why),
+                        _ => r,
+                    };
+                    if r.clicked() {
+                        out = Some(on as u32);
+                    }
+                }
+            });
+            if !o.is_default() {
+                ui.label(
+                    RichText::new(format!("default {}", o.default.unwrap_or(0)))
+                        .color(ORANGE)
+                        .small(),
+                )
+                .on_hover_text(
+                    "Default of a freshly flashed current Tasmota (from its documentation, \
+                     checked against the firmware source where they disagree). Devices \
+                     upgraded from old versions can keep older values.",
+                );
+            }
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                ui.add(egui::Label::new(RichText::new(&o.title)).wrap());
+            });
+        });
+    });
+    if !o.details.is_empty() || o.warning.is_some() {
+        ui.indent(("so-details", o.n), |ui| {
+            for l in &o.details {
+                ui.add(egui::Label::new(RichText::new(l).weak().small()).wrap());
+            }
+            if let Some(w) = o.warning {
+                let c = if o.risk == Risk::Danger { RED } else { ORANGE };
+                ui.add(egui::Label::new(RichText::new(w).color(c).small()).wrap());
+            }
+            ui.hyperlink_to(RichText::new("Documentation").small(), &o.link);
+        });
+    }
+    out
+}
+
+/// Warning triangle with "!" (the default fonts have no ⚠).
+fn warn_icon(ui: &mut egui::Ui, color: Color32) -> egui::Response {
+    let h = ui.text_style_height(&egui::TextStyle::Body);
+    let (rect, resp) = ui.allocate_exact_size(vec2(h, h), Sense::hover());
+    let r = rect.shrink(1.0);
+    let p = ui.painter();
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(r.center().x, r.top()),
+            egui::pos2(r.right(), r.bottom()),
+            egui::pos2(r.left(), r.bottom()),
+        ],
+        color,
+        Stroke::NONE,
+    ));
+    p.text(
+        egui::pos2(r.center().x, r.bottom() - r.height() * 0.05),
+        Align2::CENTER_BOTTOM,
+        "!",
+        FontId::proportional(h * 0.7),
+        Color32::BLACK,
+    );
+    resp
+}
+
+/// Small gear button (the default fonts have no ⚙).
+fn gear_button(ui: &mut egui::Ui) -> egui::Response {
+    let h = ui.text_style_height(&egui::TextStyle::Body);
+    let (rect, resp) = ui.allocate_exact_size(vec2(h, h), Sense::click());
+    let color = if resp.hovered() {
+        ui.visuals().hyperlink_color
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let c = rect.center();
+    let r = h * 0.3;
+    let p = ui.painter();
+    for i in 0..8 {
+        let a = i as f32 * std::f32::consts::TAU / 8.0;
+        let d = vec2(a.cos(), a.sin());
+        p.line_segment(
+            [c + d * r, c + d * (r + h * 0.16)],
+            Stroke::new(h * 0.13, color),
+        );
+    }
+    p.circle_stroke(c, r, Stroke::new(h * 0.12, color));
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
+/// An iOS-style on/off switch.
+fn toggle(on: &mut bool) -> impl egui::Widget + '_ {
+    move |ui: &mut egui::Ui| {
+        let size = vec2(2.0, 1.0) * ui.spacing().interact_size.y;
+        let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
+        if response.clicked() {
+            *on = !*on;
+            response.mark_changed();
+        }
+        if ui.is_rect_visible(rect) {
+            let t = ui.ctx().animate_bool_responsive(response.id, *on);
+            let visuals = ui.style().interact_selectable(&response, *on);
+            let rect = rect.expand(visuals.expansion);
+            let radius = 0.5 * rect.height();
+            let fill = if *on { GREEN } else { visuals.bg_fill };
+            ui.painter().rect(
+                rect,
+                radius,
+                fill,
+                visuals.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
+            let x = egui::lerp((rect.left() + radius)..=(rect.right() - radius), t);
+            let center = egui::pos2(x, rect.center().y);
+            ui.painter().circle(
+                center,
+                0.75 * radius,
+                visuals.fg_stroke.color,
+                visuals.fg_stroke,
+            );
+        }
+        response
+    }
 }

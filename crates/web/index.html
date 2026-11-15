@@ -189,6 +189,50 @@ dialog dt { color: var(--muted); } dialog dd { margin: 0; word-break: break-all;
   padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
 #toast.show { opacity: .95; }
 
+/* SetOptions */
+dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding: 0; overflow: hidden; }
+.opt-wrap { display: flex; flex-direction: column; max-height: 86vh; }
+.opt-head { padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }
+.opt-head h3 { margin: 0 0 8px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opt-head input[type=search] { flex: 1; min-width: 140px; }
+.opt-note { font-size: 13px; margin-top: 6px; }
+.opt-list { overflow: auto; padding: 4px 16px 12px; }
+.opt-list details { border-bottom: 1px solid var(--border); }
+.opt-list summary { cursor: pointer; padding: 10px 0; font-weight: 600; }
+.opt-list summary .count { color: var(--muted); font-weight: 400; margin-left: 6px; }
+.so-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 8px 0; border-top: 1px solid var(--border); }
+.so-main { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.so-n { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); flex-shrink: 0; min-width: 40px; }
+.so-title { font-weight: 500; overflow-wrap: break-word; min-width: 0; }
+.so-risk { flex-shrink: 0; cursor: help; }
+.so-risk.danger { color: var(--red); } .so-risk.app { color: var(--orange); }
+.so-def { font-size: 11.5px; color: var(--orange); white-space: nowrap; flex-shrink: 0; }
+.so-ctl { display: flex; gap: 6px; align-items: center; grid-row: 1; grid-column: 2; }
+.so-ctl input[type=number] { width: 76px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  padding: 4px 6px; border-radius: 6px; font: inherit; }
+.so-details { grid-column: 1 / -1; padding-left: 48px; font-size: 12.5px; color: var(--muted); }
+.so-details div { overflow-wrap: anywhere; }
+.so-details .warn { color: var(--orange); } .so-details .danger { color: var(--red); }
+.switch { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.switch span { position: absolute; inset: 0; background: var(--border); border-radius: 11px; cursor: pointer; transition: background .15s; }
+.switch span::before { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; border-radius: 50%;
+  background: #fff; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+.switch input:checked + span { background: var(--green); }
+.switch input:checked + span::before { transform: translateX(18px); }
+.switch input:disabled + span { opacity: .5; cursor: default; }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.gear { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 14px; }
+.gear:hover { color: var(--accent); }
+@media (max-width: 760px) {
+  dialog#optDlg { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 16px 16px 0 0; border: 0; }
+  .opt-wrap { max-height: 90vh; }
+  .so-details { padding-left: 0; }
+  .so-main { flex-wrap: wrap; row-gap: 0; }
+  /* Number fields under the title, so the title keeps the width. */
+  .so-row.num .so-ctl { grid-row: 2; grid-column: 1 / -1; }
+}
+
 @media (max-width: 760px) {
   .d-only { display: none !important; }
   .m-only { display: flex !important; }
@@ -249,6 +293,19 @@ dialog dt { color: var(--muted); } dialog dd { margin: 0; word-break: break-all;
   <h3 id="lightTitle"></h3>
   <div id="lightBody"></div>
   <div class="dlg-buttons"><button class="btn primary" id="lightClose">Close</button></div>
+</dialog>
+<dialog id="optDlg">
+  <div class="opt-wrap">
+    <div class="opt-head">
+      <div class="row"><h3 id="optTitle"></h3><button class="btn" id="optClose">Done</button></div>
+      <div class="row">
+        <input type="search" id="optSearch" placeholder="Search (number or words)" autocomplete="off">
+        <label class="check"><input type="checkbox" id="optChanged"> Only changed</label>
+      </div>
+      <div class="opt-note" id="optNote"></div>
+    </div>
+    <div class="opt-list" id="optList"></div>
+  </div>
 </dialog>
 <div id="toast"></div>
 
@@ -555,7 +612,7 @@ function renderTable(list) {
   for (const c of cols) h += `<th data-sort="${c}" ${arrow(c)}>${COLS[c].t}</th>`;
   h += `</tr></thead><tbody>`;
   for (const d of list) {
-    h += `<tr class="${d.online === false ? "offline" : ""}" ${d.upgrading && d.online === false ? 'title="Upgrading: restarting…"' : ""}><td><span class="devname">${bars(d)}${nameHtml(d)}</span></td>`;
+    h += `<tr class="${d.online === false ? "offline" : ""}" ${d.upgrading && d.online === false ? 'title="Upgrading: restarting…"' : ""}><td><span class="devname">${bars(d)}${nameHtml(d)}${d.has_options && !docMode.bare ? `<button class="gear" data-act="options" data-topic="${esc(d.topic)}" title="SetOptions" aria-label="SetOptions">⚙</button>` : ""}</span></td>`;
     for (const c of cols) h += `<td class="${COLS[c].num && !["rssi", "ap"].includes(c) ? "num" : ""}">${cellHtml(d, c)}</td>`;
     h += `</tr>`;
   }
@@ -652,6 +709,7 @@ function renderSheet() {
     const other = d.ap === 1 ? 2 : 1;
     h += `<button class="btn" data-act="ap" data-topic="${esc(d.topic)}" data-n="${other}" ${d.online !== true ? "disabled" : ""}>Switch to SSId ${other}</button>`;
   }
+  if (d.has_options) h += `<button class="btn" data-act="options" data-topic="${esc(d.topic)}">SetOptions</button>`;
   h += updateHtml(d) + `</div>`;
   for (const [title, cols] of SECTIONS) {
     const rows = cols.map(c => [c, sheetValue(d, c)]).filter(([, v]) => v !== "");
@@ -709,6 +767,7 @@ async function onAction(btn) {
   const t = btn.dataset.topic, d = byTopic(t);
   if (!d) return;
   if (btn.dataset.act === "light") return openLight(t);
+  if (btn.dataset.act === "options") return openOptions(t);
   if (data.read_only) return readOnlyNotice();
   const base = `/api/devices/${encodeURIComponent(t)}`;
   if (btn.dataset.act === "power") return post(`${base}/power/${btn.dataset.n}`);
@@ -890,6 +949,7 @@ async function load() {
   }
   // Don't redraw under an open dialog or menu.
   if (!$("dlg").open && !$("colsMenu").open) render();
+  if ($("optDlg").open && !$("dlg").open) loadOptions();
   if (docMode.upgrade && !$("dlg").open && !load.docOpened) {
     const d = byTopic(docMode.upgrade);
     if (d) {
@@ -906,6 +966,137 @@ async function load() {
     document.body.dataset.h = Math.ceil(r.bottom);
   }
 }
+
+// ---------------------------------------------------------------- SetOptions
+// Values come from the device (Status 0 / Status 3); descriptions are downloaded by the
+// server from the Tasmota documentation. Risky options ask first; MQTT or Wi-Fi off is refused.
+const opt = { topic: null, view: null, open: new Set(["General"]) };
+
+async function openOptions(topic) {
+  const d = byTopic(topic);
+  if (!d) return;
+  opt.topic = topic; opt.view = null;
+  $("optTitle").textContent = `${d.name} — SetOptions`;
+  $("optSearch").value = ""; $("optChanged").checked = false;
+  $("optList").innerHTML = `<p style="color:var(--muted)">Loading…</p>`;
+  $("optNote").textContent = "";
+  $("optDlg").showModal();
+  await loadOptions();
+}
+
+async function loadOptions() {
+  if (!opt.topic || !$("optDlg").open) return;
+  try {
+    const r = await fetch(`/api/devices/${encodeURIComponent(opt.topic)}/options`, { cache: "no-store" });
+    if (!r.ok) throw new Error(await r.text());
+    opt.view = await r.json();
+  } catch (e) { $("optNote").innerHTML = `<span class="warn-text">${esc(String(e.message || e))}</span>`; return; }
+  renderOptions();
+}
+
+const soValue = (o, v) => o.numeric ? String(v) : (v ? "ON (1)" : "OFF (0)");
+// Same rule as the core: for SO32–49 a 0 below the documented minimum is the built-in default.
+const isDefault = o => (o.numeric && o.value === 0 && o.zero_is_default) || o.default == null || o.default === o.value;
+
+function renderOptions() {
+  const v = opt.view, d = byTopic(opt.topic);
+  if (!v || !d) return;
+  const canEdit = d.online === true && !data.read_only;
+  let note = "";
+  if (v.texts === "loading" && v.options.every(o => o.title.startsWith("SetOption")))
+    note += `<span style="color:var(--muted)">Loading the descriptions from the Tasmota documentation…</span> `;
+  if (v.texts === "failed") note += `<span class="warn-text">Descriptions not available (no internet?): options are shown by number.</span> `;
+  if (data.read_only) note += `<span class="warn-text">Read-only mode is on: options can't be changed.</span>`;
+  else if (d.online !== true) note += `<span class="warn-text">The device is not online.</span>`;
+  $("optNote").innerHTML = note;
+
+  const q = $("optSearch").value.trim().toLowerCase(), changed = $("optChanged").checked;
+  const hay = o => `so${o.n} setoption${o.n} ${o.title} ${o.category} ${o.details.join(" ")}`.toLowerCase();
+  // A number ("4", "so4", "setoption4") matches that option only, not SO40–49.
+  const word = (o, t) => { const m = t.match(/^(?:setoption|so)?(\d+)$/); return m ? +m[1] === o.n : hay(o).includes(t); };
+  const shown = v.options.filter(o => (!changed || !isDefault(o)) && (!q || q.split(/\s+/).every(t => word(o, t))));
+  const cats = [...new Set(v.options.map(o => o.category))];
+  let h = "";
+  if (!v.reported) h += `<p style="color:var(--muted)">The device has not reported its options yet.</p>`;
+  else if (!shown.length) h += `<p style="color:var(--muted)">No option matches.</p>`;
+  for (const c of cats) {
+    const list = shown.filter(o => o.category === c);
+    if (!list.length) continue;
+    const isOpen = q || changed || opt.open.has(c);
+    h += `<details data-cat="${esc(c)}" ${isOpen ? "open" : ""}><summary>${esc(c)}<span class="count">${list.length}</span></summary>`;
+    for (const o of list) {
+      const risk = o.risk === "danger" ? `<span class="so-risk danger" title="${esc(o.warning ?? "")}">⚠</span>`
+        : o.risk === "app" ? `<span class="so-risk app" title="${esc(o.warning ?? "")}">⚠</span>` : "";
+      const def = isDefault(o) ? "" : `<span class="so-def" title="Default of a freshly flashed current Tasmota (from its documentation, checked against the firmware source where they disagree). Devices upgraded from old versions can keep older values.">default ${o.default}</span>`;
+      const dis = canEdit ? "" : "disabled";
+      const ctl = o.numeric
+        ? `<input type="number" min="${Math.min(o.min, o.value)}" max="${o.max}" value="${o.value}" data-so-num="${o.n}" ${dis}>
+           <button class="btn" data-so-set="${o.n}" ${dis}>Set</button>`
+        : `<label class="switch" title="${esc(o.blocked_reason && o.blocked_value !== o.value ? o.blocked_reason : "")}">
+             <input type="checkbox" data-so="${o.n}" ${o.value ? "checked" : ""} ${dis}
+               aria-label="SetOption${o.n}"><span></span></label>`;
+      let det = o.details.map(l => `<div>${esc(l)}</div>`).join("");
+      if (o.warning) det += `<div class="${o.risk === "danger" ? "danger" : "warn"}">${esc(o.warning)}</div>`;
+      det += `<div><a href="${esc(o.link)}" target="_blank" rel="noopener">Documentation</a></div>`;
+      h += `<div class="so-row${o.numeric ? " num" : ""}"><div class="so-main"><span class="so-n">SO${o.n}</span>${risk}<span class="so-title">${esc(o.title)}</span>${def}</div>
+        <div class="so-ctl">${ctl}</div><div class="so-details">${det}</div></div>`;
+    }
+    h += `</details>`;
+  }
+  if (v.reported) h += `<p><a href="${esc(v.docs)}" target="_blank" rel="noopener">All SetOptions in the Tasmota documentation</a></p>`;
+  const list = $("optList"), top = list.scrollTop;
+  // Keep a number being typed.
+  const typing = document.activeElement?.dataset?.soNum;
+  if (typing) return;
+  list.innerHTML = h;
+  list.scrollTop = top;
+}
+
+async function changeOption(n, value) {
+  const o = opt.view?.options.find(x => x.n === n), d = byTopic(opt.topic);
+  if (!o || !d) return;
+  if (o.blocked_value === value && o.blocked_reason) return toast(o.blocked_reason);
+  if (data.read_only) return readOnlyNotice();
+  if (o.risk !== "normal") {
+    let body = `<p><b>${esc(o.title)}</b></p>` + o.details.map(l => `<p style="color:var(--muted);margin:4px 0">${esc(l)}</p>`).join("") +
+      `<p>From ${soValue(o, o.value)} to ${soValue(o, value)}.</p>` +
+      (o.warning ? `<p class="${o.risk === "danger" ? "" : "warn-text"}" style="${o.risk === "danger" ? "color:var(--red)" : ""}">${esc(o.warning)}</p>` : "") +
+      `<p><a href="${esc(o.link)}" target="_blank" rel="noopener">Documentation</a></p>`;
+    if (!await confirmDialog(`Change SetOption${n} on ${d.name}?`, body, "Change")) return;
+  }
+  try {
+    const r = await fetch(`/api/devices/${encodeURIComponent(opt.topic)}/option/${n}/${value}`, { method: "POST" });
+    if (!r.ok) toast(await r.text() || `Error ${r.status}`);
+  } catch (e) { toast("Server not reachable"); }
+  setTimeout(loadOptions, 700);
+}
+
+$("optList").addEventListener("click", e => {
+  const set = e.target.closest("[data-so-set]");
+  if (set) {
+    const n = +set.dataset.soSet, inp = $("optList").querySelector(`[data-so-num="${n}"]`);
+    const v = Math.round(+inp.value), o = opt.view.options.find(x => x.n === n);
+    if (!(v >= o.min && v <= o.max)) return toast(`Value must be ${o.min}…${o.max}.`);
+    inp.blur();
+    changeOption(n, v);
+  }
+});
+$("optList").addEventListener("change", e => {
+  const cb = e.target.closest("[data-so]");
+  if (!cb) return;
+  const n = +cb.dataset.so, want = cb.checked ? 1 : 0;
+  cb.checked = !cb.checked; // shows the device's value until it confirms the change
+  changeOption(n, want);
+});
+$("optList").addEventListener("toggle", e => {
+  const c = e.target.dataset?.cat;
+  if (!c || $("optSearch").value.trim() || $("optChanged").checked) return;
+  if (e.target.open) opt.open.add(c); else opt.open.delete(c);
+}, true);
+$("optSearch").addEventListener("input", renderOptions);
+$("optChanged").addEventListener("change", renderOptions);
+$("optClose").addEventListener("click", () => $("optDlg").close());
+$("optDlg").addEventListener("close", () => { opt.topic = null; });
 
 renderHeader();
 load();
