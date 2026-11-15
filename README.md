@@ -37,6 +37,26 @@ Every archive and disk image contains the licenses, its Trivy vulnerability repo
 of the downloads and `security-reports.zip` (all reports and SBOMs, see
 [Releases and CI](DEVELOPMENT.md#releases-and-ci)).
 
+### Code signing policy
+
+Windows releases use free code signing provided by [SignPath.io](https://about.signpath.io),
+certificate by [SignPath Foundation](https://signpath.org) (application in progress: until it
+is approved, the Windows executables are not signed).
+
+- Committers and reviewers: [fragolinux](https://github.com/fragolinux)
+- Approvers: [fragolinux](https://github.com/fragolinux)
+
+Every signed file is built by the `release.yml` workflow from this repository, and every
+signing request is approved by hand.
+
+### Privacy
+
+This program will not transfer any information to other networked systems unless
+specifically requested by the user or the person installing or operating it. It only
+connects to the MQTT broker you configure (and to your devices' own web pages when you open
+them), and asks GitHub's public API for the number of the latest Tasmota release, to mark
+outdated firmware. Nothing about you or your devices is sent anywhere else.
+
 ## Features (v0.1)
 
 - Connects to your MQTT broker and discovers Tasmota devices automatically
