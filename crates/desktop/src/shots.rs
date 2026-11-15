@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use super::*;
 
 const STEPS: &[&str] = &[
-    "home", "health", "firmware", "wifi", "mqtt", "log", "settings",
+    "home", "health", "firmware", "wifi", "mqtt", "log", "settings", "light",
 ];
 
 pub(super) struct Shots {
@@ -48,6 +48,7 @@ impl DerustApp {
             s.step += 1;
             self.settings_open = false;
             self.log_open = false;
+            self.light_open = None;
             if s.step == STEPS.len() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 return;
@@ -65,6 +66,21 @@ impl DerustApp {
                 "log" => {
                     self.cfg.view = View::Home;
                     self.log_open = true;
+                }
+                "light" => {
+                    self.cfg.view = View::Home;
+                    if self.light_open.is_none() {
+                        let lamp = self
+                            .store
+                            .devices
+                            .values()
+                            .find(|d| d.light.as_ref().is_some_and(|l| l.has_color()));
+                        if let Some((k, l)) =
+                            lamp.and_then(|d| Some((d.topic.clone(), d.light.as_ref()?)))
+                        {
+                            self.light_open = Some((k, LightEdit::from(l)));
+                        }
+                    }
                 }
                 "settings" => {
                     self.draft = self.cfg.broker.clone();

@@ -121,6 +121,8 @@ pub struct Device {
     pub uptime: Option<(u64, Instant)>,
     pub power: Vec<Option<bool>>,
     pub sensor: Option<Value>,
+    /// Dimmable / CCT / RGB light, when the device reports one.
+    pub light: Option<crate::light::Light>,
     pub upgrade: Option<Upgrade>,
 }
 
@@ -330,6 +332,7 @@ impl Device {
         set_i64(&mut self.sleep, v, "Sleep");
         set_i64(&mut self.mqtt_count, v, "MqttCount");
         self.parse_power_keys(v);
+        self.parse_light(v);
         if let Some(w) = v.get("Wifi") {
             set_i64(&mut self.ap, w, "AP");
             set_str(&mut self.ssid, w, "SSId");
@@ -409,8 +412,16 @@ impl Device {
         set_i64(&mut self.boot_count, i3, "BootCount");
     }
 
+    fn parse_light(&mut self, v: &Value) {
+        let mut l = self.light.clone().unwrap_or_default();
+        if l.update(v) {
+            self.light = Some(l);
+        }
+    }
+
     fn parse_result(&mut self, v: &Value, ssids: &mut [Option<String>; 2]) {
         self.parse_power_keys(v);
+        self.parse_light(v);
         match v.get("Module") {
             Some(Value::Object(m)) => {
                 if let Some(name) = m.values().find_map(Value::as_str) {

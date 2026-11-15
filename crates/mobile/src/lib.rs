@@ -32,6 +32,7 @@ pub enum CommandError {
     OtherUpgradeRunning,
     UpgradeNotPossible,
     NotOfficialOtaUrl,
+    NotALight,
 }
 
 impl CommandError {
@@ -47,6 +48,7 @@ impl CommandError {
             CommandError::OtherUpgradeRunning => E::OtherUpgradeRunning,
             CommandError::UpgradeNotPossible => E::UpgradeNotPossible,
             CommandError::NotOfficialOtaUrl => E::NotOfficialOtaUrl,
+            CommandError::NotALight => E::NotALight,
         }
     }
 }
@@ -72,6 +74,7 @@ impl From<session::CommandError> for CommandError {
             E::OtherUpgradeRunning => CommandError::OtherUpgradeRunning,
             E::UpgradeNotPossible => CommandError::UpgradeNotPossible,
             E::NotOfficialOtaUrl => CommandError::NotOfficialOtaUrl,
+            E::NotALight => CommandError::NotALight,
         }
     }
 }
@@ -135,6 +138,25 @@ pub struct Device {
     /// "release", "development" or "custom": what the OtaUrl points at.
     pub ota_channel: String,
     pub can_switch_channel: bool,
+    pub light: Option<Light>,
+}
+
+/// A dimmable / CCT / RGB light.
+#[derive(uniffi::Record)]
+pub struct Light {
+    /// "Dimmer", "CCT", "RGB", "RGBW" or "RGBCCT".
+    pub kind: String,
+    pub dimmer: Option<i64>,
+    pub hue: Option<i64>,
+    pub sat: Option<i64>,
+    pub bri: Option<i64>,
+    pub ct: Option<i64>,
+    pub white: Option<i64>,
+    pub has_color: bool,
+    pub has_ct: bool,
+    pub has_white: bool,
+    /// "#RRGGBB"
+    pub swatch: String,
 }
 
 /// What the upgrade button does now (see the core's `ota::PlanInfo`).
@@ -215,6 +237,19 @@ impl From<session::DeviceInfo> for Device {
             upgrade_text: d.upgrade.map(|u| u.text),
             upgrading: d.upgrading,
             ota_channel: d.ota_channel.to_string(),
+            light: d.light.map(|l| Light {
+                kind: l.kind.to_string(),
+                dimmer: l.dimmer,
+                hue: l.hue,
+                sat: l.sat,
+                bri: l.bri,
+                ct: l.ct,
+                white: l.white,
+                has_color: l.has_color,
+                has_ct: l.has_ct,
+                has_white: l.has_white,
+                swatch: l.swatch,
+            }),
             can_switch_channel: d.can_switch_channel,
             up_to_date: d.up_to_date,
             upgrade_plan: UpgradePlan {
@@ -294,8 +329,70 @@ impl Session {
         Ok(self.inner.upgrade(&topic)?)
     }
 
+    /// Light brightness 0..100.
+    pub fn set_dimmer(&self, topic: String, dimmer: i64) -> Result<(), CommandError> {
+        Ok(self.inner.set_dimmer(&topic, dimmer)?)
+    }
+
+    /// Colour: hue 0..359, saturation and brightness 0..100.
+    pub fn set_hsb(&self, topic: String, hue: i64, sat: i64, bri: i64) -> Result<(), CommandError> {
+        Ok(self.inner.set_hsb(&topic, hue, sat, bri)?)
+    }
+
+    /// White temperature 153 (cold) ..500 (warm).
+    pub fn set_ct(&self, topic: String, ct: i64) -> Result<(), CommandError> {
+        Ok(self.inner.set_ct(&topic, ct)?)
+    }
+
+    /// White channels brightness 0..100.
+    pub fn set_white(&self, topic: String, white: i64) -> Result<(), CommandError> {
+        Ok(self.inner.set_white(&topic, white)?)
+    }
+
     /// Points the OtaUrl at the development (true) or release (false) builds.
     pub fn set_channel(&self, topic: String, development: bool) -> Result<(), CommandError> {
         Ok(self.inner.set_channel(&topic, development)?)
+    }
+}
+
+/// Release notes of a Tasmota Derust version ("Changes" part). Blocking: call it off the
+/// main thread.
+#[derive(uniffi::Record)]
+pub struct Changelog {
+    pub version: String,
+    pub url: String,
+    pub sections: Vec<ChangelogSection>,
+    /// Why they could not be loaded.
+    pub error: Option<String>,
+}
+
+#[derive(uniffi::Record)]
+pub struct ChangelogSection {
+    pub title: String,
+    pub items: Vec<String>,
+}
+
+#[uniffi::export]
+pub fn changelog(version: String) -> Changelog {
+    match tasmota_derust_core::github::changelog(&version) {
+        Ok(c) => Changelog {
+            version: c.version,
+            url: c.url,
+            sections: c
+                .sections
+                .into_iter()
+                .map(|s| ChangelogSection {
+                    title: s.title,
+                    items: s.items,
+                })
+                .collect(),
+            error: None,
+        },
+        Err(e) => Changelog {
+            version,
+            url: "https://github.com/fragolinux/tasmota-derust/releases".into(),
+            sections: Vec::new(),
+            error: Some(e),
+        },
     }
 }

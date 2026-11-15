@@ -48,6 +48,12 @@ struct Fake {
     build: String,
     /// Size of the running image (ESP8266 flash model: about 1000 KB for code).
     program_kb: i64,
+    /// Light channels (0: no light, 2 CCT, 5 RGBCCT) and its state.
+    light: u8,
+    dimmer: i64,
+    hsb: (i64, i64),
+    ct: i64,
+    white: i64,
 }
 
 const FLASH_KB: i64 = 1000;
@@ -266,6 +272,32 @@ fn devices() -> Vec<Fake> {
             86_400 * 900,
             false,
         ),
+        (
+            "lampada",
+            "Desk lamp",
+            "Generic",
+            1,
+            82,
+            1,
+            "16.0.0",
+            true,
+            "Power On",
+            3_600 * 30,
+            false,
+        ),
+        (
+            "corridoio",
+            "Hall light",
+            "Generic",
+            1,
+            71,
+            2,
+            "16.0.0",
+            true,
+            "Power On",
+            3_600 * 50,
+            false,
+        ),
     ];
     list.iter()
         .enumerate()
@@ -308,6 +340,15 @@ fn devices() -> Vec<Fake> {
                     } else {
                         651
                     },
+                    light: match topic {
+                        "lampada" => 5,
+                        "corridoio" => 2,
+                        _ => 0,
+                    },
+                    dimmer: 70,
+                    hsb: (30, 80),
+                    ct: 300,
+                    white: 0,
                 }
             },
         )
@@ -352,7 +393,47 @@ impl Fake {
         for i in 0..self.relays {
             v[self.power_key(i)] = json!(if self.power[i] { "ON" } else { "OFF" });
         }
+        if let (Value::Object(m), Value::Object(l)) = (&mut v, self.light_json()) {
+            m.extend(l);
+        }
         v
+    }
+
+    /// Light fields of STATE / RESULT, roughly as Tasmota computes them.
+    fn light_json(&self) -> Value {
+        if self.light == 0 {
+            return json!({});
+        }
+        let d = if self.power[0] { self.dimmer } else { 0 };
+        let scale = |x: i64| (x * d / 100).clamp(0, 255);
+        let t = (self.ct - 153) * 255 / (500 - 153);
+        let (cw, ww) = (scale(255 - t), scale(t));
+        let pct = |x: i64| x * 100 / 255;
+        if self.light == 2 {
+            return json!({ "Dimmer": self.dimmer, "Color": format!("{cw:02X}{ww:02X}"), "CT": self.ct,
+                           "Channel": [pct(cw), pct(ww)] });
+        }
+        // RGBCCT: either the colour or the white channels, like Tasmota's default.
+        let white = self.white > 0;
+        let (r, g, b) = if white {
+            (0, 0, 0)
+        } else {
+            let (r, g, b) = tasmota_derust_core::light::hsv_to_rgb(
+                self.hsb.0 as f32,
+                self.hsb.1 as f32 / 100.0,
+                1.0,
+            );
+            (scale(r as i64), scale(g as i64), scale(b as i64))
+        };
+        let (cw, ww) = if white { (cw, ww) } else { (0, 0) };
+        json!({
+            "Dimmer": self.dimmer,
+            "Color": format!("{r:02X}{g:02X}{b:02X}{cw:02X}{ww:02X}"),
+            "HSBColor": format!("{},{},{}", self.hsb.0, self.hsb.1, self.dimmer),
+            "White": self.white,
+            "CT": self.ct,
+            "Channel": [pct(r), pct(g), pct(b), pct(cw), pct(ww)],
+        })
     }
 
     fn sensor_msg(&self) -> Option<Value> {
@@ -551,8 +632,51 @@ fn handle(client: &Client, fakes: &Arc<Mutex<Vec<Fake>>>, topic: &str, cmd: &str
             };
             let key = f.power_key(i);
             let val = if f.power[i] { "ON" } else { "OFF" };
-            send(stat("RESULT"), json!({ key.clone(): val }).to_string());
+            let mut r = json!({ key.clone(): val });
+            if let (Value::Object(m), Value::Object(l)) = (&mut r, f.light_json()) {
+                m.extend(l);
+            }
+            send(stat("RESULT"), r.to_string());
             send(stat(&key), val.into());
+        }
+        "DIMMER" | "HSBCOLOR" | "CT" | "WHITE" if f.light > 0 && !payload.is_empty() => {
+            let n = |s: &str| s.trim().parse::<i64>().ok();
+            match cmd {
+                "DIMMER" => {
+                    if let Some(v) = n(payload) {
+                        f.dimmer = v.clamp(0, 100);
+                    }
+                }
+                "HSBCOLOR" if f.light >= 3 => {
+                    let p: Vec<i64> = payload.split(',').filter_map(n).collect();
+                    if p.len() == 3 {
+                        f.hsb = (p[0].rem_euclid(360), p[1].clamp(0, 100));
+                        f.dimmer = p[2].clamp(0, 100);
+                        f.white = 0;
+                    }
+                }
+                "CT" => {
+                    if let Some(v) = n(payload) {
+                        f.ct = v.clamp(153, 500);
+                        if f.light == 5 && f.white == 0 {
+                            f.white = f.dimmer.max(1);
+                        }
+                    }
+                }
+                "WHITE" if f.light >= 4 => {
+                    if let Some(v) = n(payload) {
+                        f.white = v.clamp(0, 100);
+                    }
+                }
+                _ => return,
+            }
+            // Any light command switches the light on, like Tasmota.
+            f.power[0] = true;
+            let mut r = json!({ "POWER": "ON" });
+            if let (Value::Object(m), Value::Object(l)) = (&mut r, f.light_json()) {
+                m.extend(l);
+            }
+            send(stat("RESULT"), r.to_string());
         }
         "AP" if payload == "1" || payload == "2" => {
             f.ap = payload.parse().unwrap();

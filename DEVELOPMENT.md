@@ -182,7 +182,7 @@ reports. The `.dmg` is made with `hdiutil`, so the macOS desktop app is packed o
 `crates/core/examples/simulator.rs` plays a few fake Tasmota devices on a **local** broker
 (among them an ESP32 that upgrades through safeboot, an unplugged plug with a stale
 "Online" LWT, and an ESP8266 on 6.7.1 with about 1 MB of flash that follows the whole
-upgrade path, minimal images included). It refuses any broker that is not on this computer.
+upgrade path, minimal images included, plus an RGBCCT and a CCT bulb). It refuses any broker that is not on this computer.
 It answers the read queries and the
 commands (relays, AP switch, upgrade), so every screen can be tried safely:
 

@@ -56,7 +56,7 @@ specifically requested by the user or the person installing or operating it. It 
 connects to the MQTT broker you configure (and to your devices' own web pages when you open
 them), asks GitHub for the version numbers of the latest Tasmota release and development
 build (to mark outdated firmware) and of the latest Tasmota Derust release (to say when a
-newer one is out), and asks ota.tasmota.com for the size of a firmware image before an
+newer one is out) and its release notes when you open them, and asks ota.tasmota.com for the size of a firmware image before an
 upgrade step. Nothing about you or your devices is sent anywhere.
 
 ## Features
@@ -65,6 +65,9 @@ upgrade step. Nothing about you or your devices is sent anywhere.
   (native `tasmota/discovery` messages, plus LWT-based discovery for older firmware).
 - One global device list with five views: **Home, Health, Firmware, Wifi, MQTT**.
 - Relay buttons inline on each row: one click toggles the relay.
+- **Lights**: dimmable, CCT, RGB, RGBW and RGBCCT lights show their colour next to the relay
+  buttons; a colour wheel and sliders set colour, brightness, white temperature and white
+  (`HSBColor`, `Dimmer`, `CT`, `White`), each only when the light has it.
 - Show or hide devices that the broker knows about but that are currently offline.
 - Per-view column chooser (show/hide, reorder), saved between runs.
 - Click a device name to open its web UI.
@@ -86,6 +89,8 @@ upgrade step. Nothing about you or your devices is sent anywhere.
   release builds or at the development builds (same image, ESP8266 and ESP32); the upgrade
   button then shows whether there is something to install.
 - Message log panel for troubleshooting.
+- The version at the bottom right opens the list of changes of that release (and of a newer
+  one, when it is out).
 - **Read-only mode**, on at every start: only read queries (`Status 0`, `Module`, `SSId1/2`)
   are sent, and relays, Wi-Fi switching and upgrades are refused. Trying one says that
   read-only is on and where to turn it off.

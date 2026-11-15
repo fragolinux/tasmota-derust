@@ -1,5 +1,12 @@
 package dev.derust.tasmota.ui
 
+import androidx.compose.material3.AlertDialog
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.text.font.FontWeight
+import dev.derust.tasmota.core.Changelog
+import dev.derust.tasmota.core.changelog
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -113,15 +120,45 @@ fun SettingsScreen(
             val version = remember {
                 runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull()
             }
-            Text(
-                "Tasmota Derust ${version ?: ""}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (appUpdate != null) {
-                val uri = LocalUriHandler.current
-                TextButton(onClick = { uri.openUri(appReleases) }) { Text("Version $appUpdate is available") }
+            var showNotes by remember { mutableStateOf<String?>(null) }
+            TextButton(onClick = { showNotes = version }, enabled = version != null) {
+                Text("Tasmota Derust ${version ?: ""}: what changed", style = MaterialTheme.typography.bodySmall)
             }
+            if (appUpdate != null) {
+                TextButton(onClick = { showNotes = appUpdate }) { Text("Version $appUpdate is available: what changed") }
+            }
+            showNotes?.let { v -> ChangelogDialog(v, onClose = { showNotes = null }) }
         }
     }
+}
+
+/** Release notes of a Tasmota Derust version, loaded from GitHub. */
+@Composable
+private fun ChangelogDialog(version: String, onClose: () -> Unit) {
+    var notes by remember(version) { mutableStateOf<Changelog?>(null) }
+    LaunchedEffect(version) { notes = withContext(Dispatchers.IO) { changelog(version) } }
+    val uri = LocalUriHandler.current
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Tasmota Derust $version") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                val n = notes
+                when {
+                    n == null -> Text("Loading the release notes…")
+                    n.error != null -> Text(n.error!!)
+                    n.sections.isEmpty() -> Text("No list of changes in these release notes.")
+                    else -> n.sections.forEach { sec ->
+                        Text(sec.title, fontWeight = FontWeight.Bold)
+                        sec.items.forEach { Text("• $it") }
+                        Spacer(Modifier.padding(top = 6.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
+        dismissButton = {
+            notes?.let { n -> TextButton(onClick = { uri.openUri(n.url) }) { Text("Release page") } }
+        },
+    )
 }

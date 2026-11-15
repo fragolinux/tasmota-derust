@@ -1,5 +1,8 @@
 package dev.derust.tasmota.ui
 
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -116,7 +119,12 @@ private fun subtitle(d: Device, view: View): String {
 private fun RowEnd(d: Device, view: View, s: Snapshot, onToggle: (Int) -> Unit) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     when (view) {
-        View.Home -> RelayButtons(d, enabled = d.online == true, large = false, onToggle = onToggle)
+        View.Home -> {
+            d.light?.let {
+                Box(Modifier.size(18.dp).background(swatchColor(it.swatch), RoundedCornerShape(4.dp)))
+            }
+            RelayButtons(d, enabled = d.online == true, large = false, onToggle = onToggle)
+        }
         View.Health -> {
             Text(fmtShort(d.uptime), color = muted, fontSize = 13.sp)
             RssiChip(d)

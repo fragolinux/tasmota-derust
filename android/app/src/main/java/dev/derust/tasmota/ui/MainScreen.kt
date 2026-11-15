@@ -175,6 +175,10 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             onSwitchAp = { n -> vm.switchAp(open.topic, n) },
             onUpgrade = { vm.upgrade(open.topic) },
             onSetChannel = { dev -> vm.setChannel(open.topic, dev) },
+            onHsb = { h, sat, b -> vm.setHsb(open.topic, h, sat, b) },
+            onDimmer = { vm.setDimmer(open.topic, it) },
+            onCt = { vm.setCt(open.topic, it) },
+            onWhite = { vm.setWhite(open.topic, it) },
             readOnly = vm.readOnly,
             onReadOnly = vm::readOnlyHit,
         )

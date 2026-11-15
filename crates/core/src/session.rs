@@ -46,6 +46,7 @@ pub enum CommandError {
     OtherUpgradeRunning,
     UpgradeNotPossible,
     NotOfficialOtaUrl,
+    NotALight,
 }
 
 impl CommandError {
@@ -64,6 +65,7 @@ impl CommandError {
             CommandError::NotOfficialOtaUrl => {
                 "The OtaUrl is not an official release or development URL."
             }
+            CommandError::NotALight => "This device has no light that can do this.",
         }
     }
 }
@@ -271,6 +273,60 @@ impl Session {
         Ok(())
     }
 
+    /// Light brightness, 0..100 (`Dimmer`).
+    pub fn set_dimmer(&self, topic: &str, dimmer: i64) -> Result<(), CommandError> {
+        self.light_command(topic, |_| true, "DIMMER", dimmer.clamp(0, 100).to_string())
+    }
+
+    /// Colour of an RGB light: hue 0..359, saturation and brightness 0..100 (`HSBColor`).
+    pub fn set_hsb(&self, topic: &str, hue: i64, sat: i64, bri: i64) -> Result<(), CommandError> {
+        let v = format!(
+            "{},{},{}",
+            hue.rem_euclid(360),
+            sat.clamp(0, 100),
+            bri.clamp(0, 100)
+        );
+        self.light_command(topic, |l| l.has_color(), "HSBCOLOR", v)
+    }
+
+    /// White colour temperature, 153 (cold) ..500 (warm) mireds (`CT`).
+    pub fn set_ct(&self, topic: &str, ct: i64) -> Result<(), CommandError> {
+        let v = ct
+            .clamp(crate::light::CT_MIN, crate::light::CT_MAX)
+            .to_string();
+        self.light_command(topic, |l| l.has_ct(), "CT", v)
+    }
+
+    /// Brightness of the white channels of an RGBW/RGBCCT light, 0..100 (`White`).
+    pub fn set_white(&self, topic: &str, white: i64) -> Result<(), CommandError> {
+        self.light_command(
+            topic,
+            |l| l.has_white(),
+            "WHITE",
+            white.clamp(0, 100).to_string(),
+        )
+    }
+
+    fn light_command(
+        &self,
+        topic: &str,
+        supports: impl Fn(&crate::light::Light) -> bool,
+        cmd: &str,
+        payload: String,
+    ) -> Result<(), CommandError> {
+        let action = {
+            let s = self.shared.lock().unwrap();
+            self.guard(&s, topic)?;
+            let light = s.store.devices.get(topic).and_then(|d| d.light.as_ref());
+            if !light.is_some_and(supports) {
+                return Err(CommandError::NotALight);
+            }
+            s.store.command(topic, cmd, &payload)
+        };
+        run_actions(&self.mqtt, action.into_iter().collect());
+        Ok(())
+    }
+
     /// Points the device's OtaUrl at the release or the development builds (same image name).
     /// Nothing is installed: the upgrade button does that.
     pub fn set_channel(&self, topic: &str, development: bool) -> Result<(), CommandError> {
@@ -376,10 +432,50 @@ pub struct DeviceInfo {
     pub up_to_date: bool,
     /// What the upgrade button would do now.
     pub upgrade_plan: crate::ota::PlanInfo,
+    pub light: Option<LightInfo>,
     /// Firmware channel the OtaUrl points at: "release", "development" or "custom".
     pub ota_channel: &'static str,
     /// The OtaUrl can be switched to the other channel.
     pub can_switch_channel: bool,
+}
+
+/// A light, as the front ends draw it.
+#[derive(Serialize, Clone, Debug)]
+pub struct LightInfo {
+    /// "Dimmer", "CCT", "RGB", "RGBW" or "RGBCCT".
+    pub kind: &'static str,
+    pub channels: u8,
+    pub dimmer: Option<i64>,
+    pub hue: Option<i64>,
+    pub sat: Option<i64>,
+    pub bri: Option<i64>,
+    pub ct: Option<i64>,
+    pub white: Option<i64>,
+    pub has_color: bool,
+    pub has_ct: bool,
+    pub has_white: bool,
+    /// Current colour for a swatch, "#RRGGBB".
+    pub swatch: String,
+}
+
+impl LightInfo {
+    fn new(l: &crate::light::Light) -> LightInfo {
+        let (r, g, b) = l.swatch();
+        LightInfo {
+            kind: l.kind(),
+            channels: l.channels,
+            dimmer: l.dimmer,
+            hue: l.hsb.map(|h| h.0),
+            sat: l.hsb.map(|h| h.1),
+            bri: l.hsb.map(|h| h.2),
+            ct: l.ct,
+            white: l.white,
+            has_color: l.has_color(),
+            has_ct: l.has_ct(),
+            has_white: l.has_white(),
+            swatch: format!("#{r:02X}{g:02X}{b:02X}"),
+        }
+    }
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -455,6 +551,7 @@ impl DeviceInfo {
             telemetry: d.telemetry(),
             sensor: d.sensor.clone(),
             upgrading: d.upgrade.as_ref().is_some_and(|u| u.is_active()),
+            light: d.light.as_ref().map(LightInfo::new),
             ota_channel: match crate::ota::channel(d.ota_url.as_deref()) {
                 crate::ota::Channel::Release => "release",
                 crate::ota::Channel::Development => "development",

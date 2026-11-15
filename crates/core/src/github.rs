@@ -106,6 +106,94 @@ fn fetch_tag(url: &'static str, notify: crate::Notify) -> Arc<Mutex<Latest>> {
     state
 }
 
+// ------------------------------------------------------------------ changelog
+
+/// The "Changes" part of a Tasmota Derust release's notes.
+#[derive(serde::Serialize, Clone, Debug, Default, PartialEq)]
+pub struct Changelog {
+    pub version: String,
+    /// Release page on GitHub.
+    pub url: String,
+    pub sections: Vec<ChangelogSection>,
+}
+
+#[derive(serde::Serialize, Clone, Debug, Default, PartialEq)]
+pub struct ChangelogSection {
+    /// "New", "Fixes", "Other".
+    pub title: String,
+    pub items: Vec<String>,
+}
+
+/// Release notes of Tasmota Derust `version` (blocking; cached for the session).
+pub fn changelog(version: &str) -> Result<Changelog, String> {
+    static CACHE: std::sync::OnceLock<Mutex<std::collections::HashMap<String, Changelog>>> =
+        std::sync::OnceLock::new();
+    let version = version.trim_start_matches(['v', 'V']).to_string();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(c) = cache.lock().unwrap().get(&version) {
+        return Ok(c.clone());
+    }
+    let url =
+        format!("https://api.github.com/repos/fragolinux/tasmota-derust/releases/tags/v{version}");
+    let mut resp = ureq::get(&url)
+        .header("User-Agent", "tasmota-derust")
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::StatusCode(404) => {
+                format!("No published release v{version} (a local build?).")
+            }
+            e => e.to_string(),
+        })?;
+    let v: serde_json::Value = resp.body_mut().read_json().map_err(|e| e.to_string())?;
+    let body = v.get("body").and_then(|b| b.as_str()).unwrap_or("");
+    let page = v
+        .get("html_url")
+        .and_then(|u| u.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            format!("https://github.com/fragolinux/tasmota-derust/releases/tag/v{version}")
+        });
+    let c = Changelog {
+        version: version.clone(),
+        url: page,
+        sections: parse_changes(body),
+    };
+    cache.lock().unwrap().insert(version, c.clone());
+    Ok(c)
+}
+
+/// The "## Changes" section of release notes: "### Title" headings with "- item" lists.
+pub fn parse_changes(body: &str) -> Vec<ChangelogSection> {
+    let mut out: Vec<ChangelogSection> = Vec::new();
+    let mut inside = false;
+    for line in body.lines().map(str::trim) {
+        if let Some(h) = line.strip_prefix("## ") {
+            inside = h.trim().eq_ignore_ascii_case("changes");
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        if let Some(t) = line.strip_prefix("### ") {
+            out.push(ChangelogSection {
+                title: t.trim().to_string(),
+                items: Vec::new(),
+            });
+        } else if let Some(item) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+            if out.is_empty() {
+                out.push(ChangelogSection {
+                    title: "Changes".into(),
+                    items: Vec::new(),
+                });
+            }
+            out.last_mut().unwrap().items.push(item.trim().to_string());
+        }
+    }
+    out.retain(|s| !s.items.is_empty());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +207,18 @@ mod tests {
             parse_version_header("TASMOTA_VERSION = 0x0F040100;").as_deref(),
             Some("15.4.1")
         );
+    }
+
+    #[test]
+    fn changes_section() {
+        let body =
+            "## Changes\n\n### New\n\n- A\n- B\n\n### Other\n\n- C\n\n## Downloads\n\n- not this";
+        let c = parse_changes(body);
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].title, "New");
+        assert_eq!(c[0].items, vec!["A", "B"]);
+        assert_eq!(c[1].items, vec!["C"]);
+        assert!(parse_changes("## Downloads\n- x").is_empty());
     }
 
     #[test]

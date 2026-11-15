@@ -5,6 +5,7 @@ pub mod columns;
 pub mod config;
 pub mod device;
 pub mod github;
+pub mod light;
 pub mod mqtt;
 pub mod ota;
 pub mod session;

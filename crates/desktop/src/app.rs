@@ -13,6 +13,7 @@ use tasmota_derust_core::columns::{Col, View};
 use tasmota_derust_core::config::{BrokerConfig, Config};
 use tasmota_derust_core::device::{self, Action, Device, StartError, Store, UpgradePhase};
 use tasmota_derust_core::github::{self, Latest};
+use tasmota_derust_core::light;
 use tasmota_derust_core::mqtt::{Mqtt, MqttEvent};
 use tasmota_derust_core::ota;
 use tasmota_derust_web::WebServer;
@@ -51,6 +52,7 @@ enum UiAction {
     AskAp(String, i64),
     /// Point the OtaUrl at the development (true) or release (false) builds.
     SetChannel(String, bool),
+    OpenLight(String),
     Sort(Option<Col>),
 }
 
@@ -94,6 +96,10 @@ pub struct DerustApp {
     read_only: bool,
     /// Short message shown at the bottom of the window, with the time it appeared.
     notice: Option<(String, Instant)>,
+    /// Light control window: device topic and the values being edited.
+    light_open: Option<(String, LightEdit)>,
+    /// Changelog popup: version and its notes (None while loading).
+    changelog: Option<(String, ChangelogSlot)>,
     #[cfg(feature = "screenshots")]
     shots: Option<shots::Shots>,
 }
@@ -123,6 +129,8 @@ impl DerustApp {
             web_error: None,
             read_only: true,
             notice: None,
+            changelog: None,
+            light_open: None,
             #[cfg(feature = "screenshots")]
             shots: shots::Shots::from_env(),
         };
@@ -337,6 +345,143 @@ impl DerustApp {
         }
     }
 
+    /// Colour wheel and sliders for one light. Values are sent when a drag ends or on a click.
+    fn light_window(&mut self, ctx: &egui::Context) {
+        let Some((key, mut edit)) = self.light_open.take() else {
+            return;
+        };
+        let Some(d) = self.store.devices.get(&key) else {
+            return;
+        };
+        let Some(light) = d.light.clone() else { return };
+        let name = d.display_name().to_string();
+        let online = d.is_online();
+        let mut open = true;
+        let mut send: Vec<(&'static str, String)> = Vec::new();
+        egui::Window::new(format!("{name} — {} light", light.kind()))
+            .id(egui::Id::unique("light-window"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.add_enabled_ui(online, |ui| {
+                    if light.has_color() {
+                        if let Some((h, sat)) = color_wheel(ui, edit.hue, edit.sat, 200.0) {
+                            edit.hue = h;
+                            edit.sat = sat;
+                            send.push(("HSBCOLOR", format!("{},{},{}", h, sat, edit.dimmer)));
+                        }
+                        ui.add_space(8.0);
+                    }
+                    let mut slider =
+                        |ui: &mut egui::Ui, v: &mut i64, range, label: &str, cmd: &'static str| {
+                            let r = ui.add(egui::Slider::new(v, range).text(label));
+                            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                                send.push((cmd, v.to_string()));
+                            }
+                        };
+                    slider(ui, &mut edit.dimmer, 0..=100, "Brightness", "DIMMER");
+                    if light.has_ct() {
+                        slider(
+                            ui,
+                            &mut edit.ct,
+                            light::CT_MIN..=light::CT_MAX,
+                            "White temperature (cold … warm)",
+                            "CT",
+                        );
+                    }
+                    if light.has_white() {
+                        slider(ui, &mut edit.white, 0..=100, "White", "WHITE");
+                    }
+                });
+                if !online {
+                    ui.colored_label(RED, "The device is not online.");
+                }
+                let (r, g, b) = light.swatch();
+                ui.horizontal(|ui| {
+                    ui.label("Now:");
+                    swatch(ui, Color32::from_rgb(r, g, b));
+                    ui.label(RichText::new(light.color.as_deref().unwrap_or("")).weak());
+                });
+            });
+        if !send.is_empty() {
+            if self.read_only {
+                self.show_notice(READ_ONLY_NOTICE);
+            } else {
+                let actions: Vec<Action> = send
+                    .into_iter()
+                    .filter_map(|(cmd, payload)| self.store.command(&key, cmd, &payload))
+                    .collect();
+                self.apply(actions);
+            }
+        }
+        if open {
+            self.light_open = Some((key, edit));
+        }
+    }
+
+    /// Fetches the release notes of `version` in the background and shows them.
+    fn open_changelog(&mut self, ctx: &egui::Context, version: &str) {
+        let slot = Arc::new(Mutex::new(None));
+        let (out, v, ctx) = (slot.clone(), version.to_string(), ctx.clone());
+        std::thread::spawn(move || {
+            *out.lock().unwrap() = Some(github::changelog(&v));
+            ctx.request_repaint();
+        });
+        self.changelog = Some((version.to_string(), slot));
+    }
+
+    fn changelog_window(&mut self, ctx: &egui::Context) {
+        let Some((version, slot)) = &self.changelog else {
+            return;
+        };
+        let mut open = true;
+        egui::Window::new(format!("Tasmota Derust {version}"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(460.0)
+            .show(ctx, |ui| match &*slot.lock().unwrap() {
+                None => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Loading the release notes…");
+                    });
+                }
+                Some(Err(e)) => {
+                    ui.colored_label(RED, e.as_str());
+                    ui.hyperlink_to(
+                        "All releases",
+                        "https://github.com/fragolinux/tasmota-derust/releases",
+                    );
+                }
+                Some(Ok(c)) => {
+                    egui::ScrollArea::vertical()
+                        .max_height(360.0)
+                        .show(ui, |ui| {
+                            if c.sections.is_empty() {
+                                ui.label("No list of changes in these release notes.");
+                            }
+                            for sec in &c.sections {
+                                ui.label(RichText::new(&sec.title).strong());
+                                for item in &sec.items {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label("•");
+                                        ui.label(item.as_str());
+                                    });
+                                }
+                                ui.add_space(6.0);
+                            }
+                        });
+                    ui.separator();
+                    ui.hyperlink_to("Release page on GitHub (downloads, full notes)", &c.url);
+                }
+            });
+        if !open {
+            self.changelog = None;
+        }
+    }
+
     fn latest_version(&self) -> Option<String> {
         match &*self.latest.lock().unwrap() {
             Latest::Ok(v) => Some(v.clone()),
@@ -516,15 +661,30 @@ impl DerustApp {
                 ui.toggle_value(&mut self.log_open, "Log").on_hover_text(
                     "MQTT messages of all devices: received (<), sent (>) and connection events",
                 );
-                ui.label(RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).weak())
-                    .on_hover_text(concat!("Tasmota Derust ", env!("CARGO_PKG_VERSION")));
+                let me = ui
+                    .add(
+                        egui::Label::new(
+                            RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).weak(),
+                        )
+                        .sense(Sense::click()),
+                    )
+                    .on_hover_text("What changed in this version");
+                if me.clicked() {
+                    self.open_changelog(ui.ctx(), env!("CARGO_PKG_VERSION"));
+                }
                 let update = github::app_update(&self.app_latest.lock().unwrap());
                 if let Some(v) = update {
-                    ui.hyperlink_to(
-                        RichText::new(format!("v{v} available")).color(ORANGE),
-                        github::APP_RELEASES,
-                    )
-                    .on_hover_text("A newer Tasmota Derust is published: open its release page");
+                    let r = ui
+                        .add(
+                            egui::Label::new(
+                                RichText::new(format!("v{v} available")).color(ORANGE),
+                            )
+                            .sense(Sense::click()),
+                        )
+                        .on_hover_text("A newer Tasmota Derust is published: see what changed");
+                    if r.clicked() {
+                        self.open_changelog(ui.ctx(), &v);
+                    }
                 }
             });
         });
@@ -675,6 +835,11 @@ impl DerustApp {
                         .and_then(|u| ota::channel_url(u, dev));
                     if let Some(x) = url.and_then(|u| self.store.command(&key, "OTAURL", &u)) {
                         self.apply(vec![x]);
+                    }
+                }
+                UiAction::OpenLight(key) => {
+                    if let Some(l) = self.store.devices.get(&key).and_then(|d| d.light.as_ref()) {
+                        self.light_open = Some((key, LightEdit::from(l)));
                     }
                 }
                 UiAction::OpenWeb(url) => {
@@ -909,6 +1074,8 @@ impl eframe::App for DerustApp {
         self.settings_window(&ctx);
         self.confirm_dialog(&ctx);
         self.notice_overlay(&ctx);
+        self.changelog_window(&ctx);
+        self.light_window(&ctx);
 
         // Keeps the uptime columns ticking.
         ctx.request_repaint_after(Duration::from_secs(1));
@@ -1083,6 +1250,96 @@ fn is_upgrading(d: &Device) -> bool {
     d.upgrade.as_ref().is_some_and(|u| u.is_active())
 }
 
+/// Release notes being loaded in the background (None until they arrive).
+type ChangelogSlot = Arc<Mutex<Option<Result<github::Changelog, String>>>>;
+
+/// Values being edited in the light window.
+#[derive(Clone, Copy)]
+struct LightEdit {
+    hue: i64,
+    sat: i64,
+    dimmer: i64,
+    ct: i64,
+    white: i64,
+}
+
+impl From<&light::Light> for LightEdit {
+    fn from(l: &light::Light) -> Self {
+        let (hue, sat, _) = l.hsb.unwrap_or((0, 0, 100));
+        LightEdit {
+            hue,
+            sat,
+            dimmer: l.dimmer.unwrap_or(100),
+            ct: l.ct.unwrap_or(326),
+            white: l.white.unwrap_or(0),
+        }
+    }
+}
+
+/// A small clickable colour square.
+fn swatch(ui: &mut egui::Ui, color: Color32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 16.0), Sense::click());
+    let p = ui.painter();
+    p.rect_filled(rect, 3.0, color);
+    p.rect_stroke(rect, 3.0, Stroke::new(1.0, GRAY), egui::StrokeKind::Inside);
+    resp
+}
+
+/// HSV colour wheel (hue around, saturation from the centre). Returns the picked
+/// (hue, saturation) when the user clicks or ends a drag.
+fn color_wheel(ui: &mut egui::Ui, hue: i64, sat: i64, size: f32) -> Option<(i64, i64)> {
+    let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click_and_drag());
+    let c = rect.center();
+    let radius = size / 2.0 - 2.0;
+    let mut mesh = egui::epaint::Mesh::default();
+    let (segs, rings) = (90, 12);
+    let col = |h: f32, s: f32| {
+        let (r, g, b) = light::hsv_to_rgb(h, s, 1.0);
+        Color32::from_rgb(r, g, b)
+    };
+    for ring in 0..=rings {
+        let s = ring as f32 / rings as f32;
+        for seg in 0..=segs {
+            let h = seg as f32 * 360.0 / segs as f32;
+            let a = h.to_radians();
+            let pos = c + vec2(a.cos(), -a.sin()) * radius * s;
+            mesh.colored_vertex(pos, col(h, s));
+        }
+    }
+    let row = segs as u32 + 1;
+    for ring in 0..rings as u32 {
+        for seg in 0..segs as u32 {
+            let i = ring * row + seg;
+            mesh.add_triangle(i, i + 1, i + row);
+            mesh.add_triangle(i + 1, i + row + 1, i + row);
+        }
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
+    // Marker at the current colour.
+    let a = (hue as f32).to_radians();
+    let at = c + vec2(a.cos(), -a.sin()) * radius * (sat as f32 / 100.0);
+    ui.painter()
+        .circle_stroke(at, 6.0, Stroke::new(2.0, Color32::WHITE));
+    ui.painter()
+        .circle_stroke(at, 7.5, Stroke::new(1.0, Color32::BLACK));
+
+    let pick = |p: egui::Pos2| light::wheel_pick(p.x - c.x, p.y - c.y, radius);
+    if let Some(p) = resp.interact_pointer_pos() {
+        if resp.dragged() {
+            // Live marker while dragging.
+            let (h, s) = pick(p);
+            let a = (h as f32).to_radians();
+            let at = c + vec2(a.cos(), -a.sin()) * radius * (s as f32 / 100.0);
+            ui.painter()
+                .circle_filled(at, 5.0, col(h as f32, s as f32 / 100.0));
+        }
+        if resp.clicked() || resp.drag_stopped() {
+            return Some(pick(p));
+        }
+    }
+    None
+}
+
 /// The bundled fonts have no "→": draw it as "->".
 fn arrows(s: &str) -> String {
     s.replace('→', "->")
@@ -1225,6 +1482,17 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
     match col {
         Col::Power => {
             ui.spacing_mut().item_spacing.x = 3.0;
+            if let Some(l) = &d.light {
+                let (r, g, b) = l.swatch();
+                let resp = swatch(ui, Color32::from_rgb(r, g, b));
+                let resp = resp.on_hover_text(format!(
+                    "{} light: click for colour and brightness",
+                    l.kind()
+                ));
+                if resp.clicked() {
+                    actions.push(UiAction::OpenLight(d.topic.clone()));
+                }
+            }
             for (i, st) in d.power.iter().enumerate() {
                 let label = format!("{}", i + 1);
                 let btn = match st {

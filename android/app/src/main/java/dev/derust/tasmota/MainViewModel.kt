@@ -130,6 +130,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun upgrade(topic: String) = command("Upgrade started") { it.upgrade(topic) }
 
+    fun setDimmer(topic: String, v: Long) = command(null) { it.setDimmer(topic, v) }
+    fun setHsb(topic: String, h: Long, s: Long, b: Long) = command(null) { it.setHsb(topic, h, s, b) }
+    fun setCt(topic: String, v: Long) = command(null) { it.setCt(topic, v) }
+    fun setWhite(topic: String, v: Long) = command(null) { it.setWhite(topic, v) }
+
     fun setChannel(topic: String, development: Boolean) =
         command(if (development) "OtaUrl: development builds" else "OtaUrl: releases") { it.setChannel(topic, development) }
 

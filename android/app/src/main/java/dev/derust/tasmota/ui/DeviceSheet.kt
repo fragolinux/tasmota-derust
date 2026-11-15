@@ -67,6 +67,10 @@ fun DeviceSheet(
     onSwitchAp: (Int) -> Unit,
     onUpgrade: () -> Unit,
     onSetChannel: (Boolean) -> Unit,
+    onHsb: (Long, Long, Long) -> Unit,
+    onDimmer: (Long) -> Unit,
+    onCt: (Long) -> Unit,
+    onWhite: (Long) -> Unit,
     /** Read-only mode (app-wide). Commands stay tappable and explain why nothing happens. */
     readOnly: Boolean,
     onReadOnly: () -> Unit,
@@ -133,6 +137,18 @@ fun DeviceSheet(
                         colors = if (warn) ButtonDefaults.outlinedButtonColors(contentColor = Orange) else ButtonDefaults.outlinedButtonColors(),
                     ) { Text(plan.button.ifEmpty { "Upgrade…" }) }
                 }
+            }
+            d.light?.let { l ->
+                Spacer(Modifier.height(14.dp))
+                // In read-only mode the controls stay usable and the commands explain why
+                // nothing happens (like the relay buttons).
+                LightControls(
+                    l, enabled = canCommand,
+                    onHsb = { h, sat, b -> if (readOnly) onReadOnly() else onHsb(h, sat, b) },
+                    onDimmer = { if (readOnly) onReadOnly() else onDimmer(it) },
+                    onCt = { if (readOnly) onReadOnly() else onCt(it) },
+                    onWhite = { if (readOnly) onReadOnly() else onWhite(it) },
+                )
             }
             d.upgradeState?.let { st ->
                 Spacer(Modifier.height(10.dp))

@@ -46,11 +46,16 @@ pub fn router(session: Arc<Session>, read_only_hint: &str) -> Router {
     Router::new()
         .route("/", get(|| async { Html(INDEX_HTML) }))
         .route("/api/state", get(api_state))
+        .route("/api/changelog/{version}", get(api_changelog))
         .route("/api/refresh", post(api_refresh))
         .route("/api/devices/{topic}/power/{n}", post(api_power))
         .route("/api/devices/{topic}/ap/{n}", post(api_ap))
         .route("/api/devices/{topic}/upgrade", post(api_upgrade))
         .route("/api/devices/{topic}/channel/{channel}", post(api_channel))
+        .route("/api/devices/{topic}/dimmer/{n}", post(api_dimmer))
+        .route("/api/devices/{topic}/hsb/{h}/{s}/{b}", post(api_hsb))
+        .route("/api/devices/{topic}/ct/{n}", post(api_ct))
+        .route("/api/devices/{topic}/white/{n}", post(api_white))
         .with_state(AppState {
             session,
             read_only_hint: read_only_hint.into(),
@@ -165,6 +170,17 @@ impl Drop for WebServer {
     }
 }
 
+/// Release notes of a Tasmota Derust version (fetched from GitHub by the server).
+async fn api_changelog(Path(version): Path<String>) -> Response {
+    let r =
+        tokio::task::spawn_blocking(move || tasmota_derust_core::github::changelog(&version)).await;
+    match r {
+        Ok(Ok(c)) => Json(c).into_response(),
+        Ok(Err(e)) => (StatusCode::BAD_GATEWAY, e).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 async fn api_state(State(st): State<AppState>) -> Json<StateReply> {
     Json(StateReply {
         snapshot: st.session.snapshot(),
@@ -191,7 +207,8 @@ fn reply(st: &AppState, r: Result<(), CommandError>) -> Response {
             | CommandError::UpgradeRunning
             | CommandError::OtherUpgradeRunning
             | CommandError::UpgradeNotPossible
-            | CommandError::NotOfficialOtaUrl,
+            | CommandError::NotOfficialOtaUrl
+            | CommandError::NotALight,
         ) => StatusCode::CONFLICT,
         Err(CommandError::NoSuchRelay | CommandError::BadAp) => StatusCode::BAD_REQUEST,
     };
@@ -207,6 +224,25 @@ async fn api_power(
 
 async fn api_ap(State(st): State<AppState>, Path((topic, n)): Path<(String, u8)>) -> Response {
     reply(&st, st.session.switch_ap(&topic, n))
+}
+
+async fn api_dimmer(State(st): State<AppState>, Path((topic, n)): Path<(String, i64)>) -> Response {
+    reply(&st, st.session.set_dimmer(&topic, n))
+}
+
+async fn api_hsb(
+    State(st): State<AppState>,
+    Path((topic, h, s, b)): Path<(String, i64, i64, i64)>,
+) -> Response {
+    reply(&st, st.session.set_hsb(&topic, h, s, b))
+}
+
+async fn api_ct(State(st): State<AppState>, Path((topic, n)): Path<(String, i64)>) -> Response {
+    reply(&st, st.session.set_ct(&topic, n))
+}
+
+async fn api_white(State(st): State<AppState>, Path((topic, n)): Path<(String, i64)>) -> Response {
+    reply(&st, st.session.set_white(&topic, n))
 }
 
 /// channel: "release" or "development". Changes the OtaUrl only.
