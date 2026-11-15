@@ -62,6 +62,19 @@ jobs:
           trivy fs --quiet --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
             --exit-code 1 --format table . > /dev/null
 
+      # The Gradle wrapper jar is a binary in the repository: it must be the official one
+      # for the Gradle version the project uses.
+      - name: Gradle wrapper is the official one
+        run: |
+          v=$(sed -n 's/.*gradle-\([0-9.]*\)-bin.zip.*/\1/p' android/gradle/wrapper/gradle-wrapper.properties)
+          expected=$(curl -fsSL "https://services.gradle.org/distributions/gradle-${v}-wrapper.jar.sha256")
+          actual=$(sha256sum android/gradle/wrapper/gradle-wrapper.jar | cut -d' ' -f1)
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::android/gradle/wrapper/gradle-wrapper.jar is not the official Gradle $v wrapper."
+            exit 1
+          fi
+          echo "Gradle $v wrapper: official"
+
       - name: Keep the reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
