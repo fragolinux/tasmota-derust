@@ -181,7 +181,7 @@ dialog dt { color: var(--muted); } dialog dd { margin: 0; word-break: break-all;
 <body>
 <header>
   <div class="row">
-    <span class="brand">Tasmota Derust</span>
+    <span class="brand">Tasmota Derust</span><span class="info m-only" id="mver"></span>
     <span class="conn"><span class="dot" id="dot"></span><span id="connText">Connecting…</span></span>
     <span class="ro-tag m-only" id="roTag" hidden role="button" title="Why can't I switch anything?">Read-only</span>
     <span class="spacer"></span>
@@ -440,7 +440,8 @@ function render() {
   $("connText").textContent = data.connected ? `Connected to ${data.broker}` : `Disconnected: ${data.status}`;
   const online = data.devices.filter(d => d.online === true).length;
   const offline = data.devices.filter(d => d.online === false).length;
-  $("counts").textContent = `${data.devices.length} devices · ${online} online · ${offline} offline`;
+  $("counts").textContent = `${data.devices.length} devices · ${online} online · ${offline} offline · v${data.app_version}`;
+  $("mver").textContent = `v${data.app_version}`;
   $("banner").innerHTML = data.read_only
     ? `<div class="banner">Read-only mode: you can look, but relays, Wi-Fi switching and upgrades are disabled. ${esc(data.read_only_hint || "")}</div>` : "";
 

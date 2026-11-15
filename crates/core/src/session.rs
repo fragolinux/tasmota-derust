@@ -150,6 +150,7 @@ impl Session {
         let latest_v = latest.as_deref().and_then(device::parse_version);
         let s = self.shared.lock().unwrap();
         Snapshot {
+            app_version: env!("CARGO_PKG_VERSION"),
             connected: s.connected,
             status: s.status.clone(),
             broker: self.broker.clone(),
@@ -293,6 +294,8 @@ pub struct DeviceInfo {
 
 #[derive(Serialize, Clone, Debug)]
 pub struct Snapshot {
+    /// Version of this program (the server, for the web page).
+    pub app_version: &'static str,
     pub connected: bool,
     pub status: String,
     pub broker: String,

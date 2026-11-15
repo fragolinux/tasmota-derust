@@ -440,7 +440,11 @@ impl DerustApp {
             let offline = self.store.devices.values().filter(|d| d.is_offline()).count();
             ui.label(format!("{total} devices · {online} online · {offline} offline"));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.toggle_value(&mut self.log_open, "Log");
+                ui.toggle_value(&mut self.log_open, "Log").on_hover_text(
+                    "MQTT messages of all devices: received (<), sent (>) and connection events",
+                );
+                ui.label(RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).weak())
+                    .on_hover_text(concat!("Tasmota Derust ", env!("CARGO_PKG_VERSION")));
             });
         });
     }
