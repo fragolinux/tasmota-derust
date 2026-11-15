@@ -299,6 +299,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Full history and tags: the changelog lists the commits since the previous tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          path: src
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: release-*
@@ -315,7 +321,18 @@ jobs:
           cd release
           sha256sum -- * > SHA256SUMS
           cd ..
-          cat > notes.md <<EOF
+          prev=$(git -C src describe --tags --abbrev=0 --match 'v[0-9]*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          {
+            echo "## Changes"
+            echo
+            if [ -n "$prev" ]; then
+              (cd src && bash scripts/changelog.sh "$prev" "$GITHUB_REF_NAME")
+            else
+              echo "First release."
+              echo
+            fi
+          } > notes.md
+          cat >> notes.md <<EOF
           ## Downloads
 
           | | Desktop app | Web server |
