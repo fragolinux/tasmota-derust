@@ -5,6 +5,9 @@
 #   make windows       Windows x64: desktop app + web server
 #   make linux         Linux x64 (glibc 2.31+): desktop app + web server
 #   make apk           Android APK
+#   make dist          Windows executables + APK, then a copy without version in the name in
+#                      dist/latest/ (every local Windows or APK build refreshes it too), e.g.
+#                      to copy to another PC with scp
 #   make mac-desktop | mac-web | win-desktop | win-web | linux-desktop | linux-web
 #   make package       Trivy scan + release files of whatever is in dist/ -> dist/release/,
 #                      reports -> dist/security/
@@ -64,10 +67,13 @@ MAC_DIR   := $(DIST)/mac
 WIN_DIR   := $(DIST)/windows
 LINUX_DIR := $(DIST)/linux
 APK_DIR   := $(DIST)/android
+# Latest local Windows executables and APK, fixed names: copying the folder overwrites the
+# previous ones.
+LATEST_DIR := $(DIST)/latest
 MAC_APP   := $(MAC_DIR)/$(APP_NAME).app
 
 .PHONY: all mac windows linux desktop web mac-desktop mac-web win-desktop win-web \
-        linux-desktop linux-web apk package release sizes clean check-tools release-key lock-android
+        linux-desktop linux-web apk dist package release sizes clean check-tools release-key lock-android
 
 all: mac windows linux apk
 	@$(MAKE) --no-print-directory sizes
@@ -99,11 +105,13 @@ win-desktop:
 	$(CARGO_BUILD) --target $(WIN_TARGET) -p tasmota-derust
 	@mkdir -p $(WIN_DIR)
 	cp target/$(WIN_TARGET)/dist/tasmota-derust.exe $(WIN_DIR)/
+	@mkdir -p $(LATEST_DIR) && cp -p $(WIN_DIR)/tasmota-derust.exe $(LATEST_DIR)/
 
 win-web:
 	$(CARGO_BUILD) --target $(WIN_TARGET) -p tasmota-derust-web
 	@mkdir -p $(WIN_DIR)
 	cp target/$(WIN_TARGET)/dist/tasmota-derust-web.exe $(WIN_DIR)/
+	@mkdir -p $(LATEST_DIR) && cp -p $(WIN_DIR)/tasmota-derust-web.exe $(LATEST_DIR)/
 
 # ------------------------------------------------------------------------- Linux
 # Cross-compiled with cargo-zigbuild (zig as the linker), also on Linux hosts, so the
@@ -130,6 +138,7 @@ apk:
 		sign --ks "$(KEYSTORE)" --ks-key-alias $(KEY_ALIAS) $(SIGN_PASS) \
 		--out $(APK_DIR)/tasmota-derust.apk $(APK_DIR)/aligned.apk
 	@rm -f $(APK_DIR)/aligned.apk $(APK_DIR)/*.idsig
+	@mkdir -p $(LATEST_DIR) && cp -p $(APK_DIR)/tasmota-derust.apk $(LATEST_DIR)/
 	@echo "Signed with $(KEYSTORE)"
 
 release-key:
@@ -147,6 +156,12 @@ lock-android:
 	cd android && ANDROID_HOME="$(ANDROID_HOME)" sh ./gradlew --quiet :app:dependencies \
 		--configuration releaseRuntimeClasspath --write-locks > /dev/null
 	@echo "Updated android/app/gradle.lockfile"
+
+# ------------------------------------------------------------------------ latest
+
+dist: windows apk
+	@echo "$(LATEST_DIR) ($(VERSION)):"
+	@ls -lh $(LATEST_DIR) | awk 'NR > 1 {print "  " $$5 "\t" $$9}'
 
 # ---------------------------------------------------------------------- release
 

@@ -78,6 +78,7 @@ builds everything and prints the sizes. Then:
 
 | Command | What it does |
 |---|---|
+| `make dist` | Windows executables + APK, then `dist/latest/` with fixed names (`tasmota-derust.exe`, `tasmota-derust-web.exe`, `tasmota-derust.apk`), refreshed by every local Windows or APK build too: copy the folder to another PC and it overwrites the old ones |
 | `make package` | Trivy scan, then release files of `dist/` in `dist/release/` (reports in `dist/security/`) |
 | `make release` | checks, version bump, build + scan, signed commit and tag, push (see [Releases](#releases-and-ci)) |
 | `make sizes` | sizes of what is in `dist/` |
