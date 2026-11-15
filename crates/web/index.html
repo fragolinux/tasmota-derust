@@ -87,6 +87,16 @@ button.ap { cursor: pointer; }
 .ver-old { color: var(--orange); font-weight: 700; }
 .up-state { margin-left: 8px; }
 .app-update { color: var(--orange); font-weight: 600; }
+.chan { display: inline-block; width: 74px; box-sizing: border-box; text-align: center; margin-right: 6px; }
+.bare header, .bare #banner, .bare .bnav, .bare #toast { display: none !important; }
+.bare body { margin: 0; padding: 0; }
+.bare main { margin: 0 !important; padding: 0 !important; max-width: none !important; }
+.bare main table { width: auto !important; min-width: 780px; }
+.bare .table-wrap { height: auto !important; max-height: none !important; overflow: visible !important;
+  display: inline-block; }
+.bare.dialog-doc main { display: none; }
+.bare dialog[open] { position: static; margin: 0; transform: none; max-height: none; width: 780px; max-width: none; box-sizing: border-box; }
+.bare dialog::backdrop { background: transparent; }
 .swatch { width: 22px; height: 18px; border-radius: 4px; border: 1px solid var(--gray); padding: 0; margin-right: 4px;
   cursor: pointer; vertical-align: middle; }
 .wheel { position: relative; width: 240px; height: 240px; border-radius: 50%; margin: 6px auto 12px; cursor: crosshair;
@@ -298,7 +308,7 @@ const COLS = {
 const VIEWS = {
   home:     { t: "Home",     cols: ["power", "telemetry", "module", "uptime", "rssi"] },
   health:   { t: "Health",   cols: ["uptime", "boot_count", "restart_reason", "load_avg", "sleep", "mqtt_count", "link_count", "downtime", "rssi"] },
-  firmware: { t: "Firmware", cols: ["version_short", "core", "sdk", "program_size", "free", "ota_url", "update"] },
+  firmware: { t: "Firmware", cols: ["version_short", "update", "core", "sdk", "program_size", "free", "ota_url"] },
   wifi:     { t: "Wifi",     cols: ["hostname", "mac", "ip", "gateway", "ssid", "ap", "bssid", "channel", "rssi", "link_count", "downtime"] },
   mqtt:     { t: "MQTT",     cols: ["topic", "full_topic", "cmnd_topic", "stat_topic", "tele_topic", "fallback_topic", "group_topic"] },
 };
@@ -315,9 +325,23 @@ const ui = {
   search: "",
 };
 if (!VIEWS[ui.view]) ui.view = "home";
+// Links and documentation screenshots: ?view=firmware&only=<topic>&cols=3&bare=1&upgrade=<topic>
+// (bare: just the table, or just the upgrade dialog; the page writes its size in
+// <body data-w data-h> for a headless browser to capture exactly that).
+const params = new URLSearchParams(location.search);
+const docMode = {
+  only: params.get("only"),
+  cols: parseInt(params.get("cols"), 10) || 0,
+  bare: params.get("bare") === "1",
+  upgrade: params.get("upgrade"),
+};
+if (VIEWS[params.get("view")]) ui.view = params.get("view");
+if (docMode.only) ui.showOffline = true;
+if (docMode.bare) document.documentElement.classList.add("bare");
 const visibleCols = v => {
-  const saved = store.get("cols." + v, null);
-  return Array.isArray(saved) ? saved.filter(c => COLS[c]) : VIEWS[v].cols.slice();
+  const saved = docMode.bare ? null : store.get("cols." + v, null);
+  const cols = Array.isArray(saved) ? saved.filter(c => COLS[c]) : VIEWS[v].cols.slice();
+  return docMode.cols ? cols.slice(0, Math.max(0, docMode.cols - 1)) : cols;
 };
 
 let data = null;
@@ -385,8 +409,11 @@ function updateHtml(d) {
   if (!busy && d.can_switch_channel) {
     const dis = d.online !== true ? "disabled" : "";
     const tip = `OtaUrl points to the ${dev ? "development" : "release"} builds. Click to use the ${dev ? "release" : "development"} builds (no upgrade yet).`;
-    h += `<button class="btn" data-act="channel" data-topic="${esc(d.topic)}" data-to="${dev ? "release" : "development"}" ${dis}
+    h += `<button class="btn chan" data-act="channel" data-topic="${esc(d.topic)}" data-to="${dev ? "release" : "development"}" ${dis}
       title="${esc(tip)}">${dev ? "Dev" : "Release"}</button>`;
+  } else if (!busy) {
+    // Same slot without a button, so what follows lines up on every row.
+    h += `<span class="chan" aria-hidden="true"></span>`;
   }
   if (!busy && d.up_to_date && plan.kind === "final") {
     const target = dev ? data.latest_dev : data.latest;
@@ -442,6 +469,7 @@ const sortValue = (d, c) => {
 function visibleDevices() {
   const q = ui.search.trim().toLowerCase();
   const list = data.devices.filter(d =>
+    (!docMode.only || d.topic === docMode.only) &&
     (ui.showOffline || d.online !== false || d.upgrading) &&
     (!q || [d.name, d.topic, d.ip, d.hostname, d.module].some(x => x && x.toLowerCase().includes(q))));
   const { col, desc } = ui.sort;
@@ -862,6 +890,21 @@ async function load() {
   }
   // Don't redraw under an open dialog or menu.
   if (!$("dlg").open && !$("colsMenu").open) render();
+  if (docMode.upgrade && !$("dlg").open && !load.docOpened) {
+    const d = byTopic(docMode.upgrade);
+    if (d) {
+      load.docOpened = true;
+      document.documentElement.classList.add("dialog-doc");
+      onAction({ dataset: { act: "upgrade", topic: d.topic } });
+      setTimeout(() => document.activeElement && document.activeElement.blur(), 0);
+    }
+  }
+  if (docMode.bare) {
+    const el = docMode.upgrade ? $("dlg") : document.querySelector("main table") || $("main");
+    const r = el.getBoundingClientRect();
+    document.body.dataset.w = Math.ceil(r.right);
+    document.body.dataset.h = Math.ceil(r.bottom);
+  }
 }
 
 renderHeader();

@@ -133,7 +133,10 @@ impl Session {
                             }
                             Err(RecvTimeoutError::Disconnected) => break,
                         }
-                        shared.lock().unwrap().store.check_timeouts();
+                        let actions = shared.lock().unwrap().store.check_timeouts();
+                        if let Some(m) = mqtt.upgrade() {
+                            run_actions(&m, actions);
+                        }
                     }
                 })
                 .expect("spawn session thread");

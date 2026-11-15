@@ -45,7 +45,7 @@ impl View {
                 Downtime,
                 Rssi,
             ],
-            View::Firmware => &[Version, Core, Sdk, ProgramSize, Free, OtaUrl, Update],
+            View::Firmware => &[Version, Update, Core, Sdk, ProgramSize, Free, OtaUrl],
             View::Wifi => &[
                 Hostname, Mac, Ip, Gateway, Ssid, Ap, Bssid, Channel, Rssi, LinkCount, Downtime,
             ],

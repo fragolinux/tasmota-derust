@@ -82,6 +82,16 @@ impl Config {
 
     /// Makes sure every view lists every column exactly once.
     fn normalize(&mut self) {
+        // Up to 0.3.0 the Firmware view ended with OtaUrl, Update: the Update column was
+        // often off screen. Untouched layouts move to the new default.
+        {
+            use Col::*;
+            const OLD_FIRMWARE: [Col; 7] = [Version, Core, Sdk, ProgramSize, Free, OtaUrl, Update];
+            if self.visible_columns(View::Firmware) == OLD_FIRMWARE {
+                self.columns
+                    .insert(View::Firmware, default_columns(View::Firmware));
+            }
+        }
         for view in View::ALL {
             let list = self
                 .columns
@@ -122,4 +132,34 @@ fn default_columns(view: View) -> Vec<ColumnSetting> {
         .iter()
         .map(|&col| ColumnSetting { col, visible: true })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn firmware(cols: &[Col]) -> Config {
+        let mut c = Config::default();
+        c.columns.insert(
+            View::Firmware,
+            cols.iter()
+                .map(|&col| ColumnSetting { col, visible: true })
+                .collect(),
+        );
+        c.normalize();
+        c
+    }
+
+    #[test]
+    fn old_firmware_layout_moves_update_forward() {
+        use Col::*;
+        let c = firmware(&[Version, Core, Sdk, ProgramSize, Free, OtaUrl, Update]);
+        assert_eq!(
+            c.visible_columns(View::Firmware),
+            View::Firmware.default_columns()
+        );
+        // A layout the user changed stays as it is.
+        let mine = [Version, OtaUrl, Update];
+        assert_eq!(firmware(&mine).visible_columns(View::Firmware), mine);
+    }
 }

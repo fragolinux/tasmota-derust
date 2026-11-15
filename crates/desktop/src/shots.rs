@@ -8,7 +8,16 @@ use std::sync::mpsc;
 use super::*;
 
 const STEPS: &[&str] = &[
-    "home", "health", "firmware", "wifi", "mqtt", "log", "settings", "light",
+    "home",
+    "health",
+    "firmware",
+    "wifi",
+    "mqtt",
+    "log",
+    "settings",
+    "light",
+    "upgrade",
+    "changelog",
 ];
 
 pub(super) struct Shots {
@@ -49,6 +58,7 @@ impl DerustApp {
             self.settings_open = false;
             self.log_open = false;
             self.light_open = None;
+            self.changelog = None;
             if s.step == STEPS.len() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 return;
@@ -80,6 +90,28 @@ impl DerustApp {
                         {
                             self.light_open = Some((k, LightEdit::from(l)));
                         }
+                    }
+                }
+                "upgrade" => {
+                    // The old switch half way through its first step, to show the Update column.
+                    self.cfg.view = View::Firmware;
+                    if let Some(d) = self.store.devices.get_mut("vecchio_interruttore") {
+                        d.upgrade = Some(device::Upgrade {
+                            started: Instant::now(),
+                            from: d.version.clone(),
+                            phase: UpgradePhase::Done(
+                                "Upgraded 6.7.1 → 7.2.0. 3 steps left: upgrade again for the next one.".into(),
+                            ),
+                            target: None,
+                            step: None,
+                            commands: Vec::new(),
+                            resent: false,
+                        });
+                    }
+                }
+                "changelog" => {
+                    if self.changelog.is_none() {
+                        self.open_changelog(ctx, env!("CARGO_PKG_VERSION"));
                     }
                 }
                 "settings" => {

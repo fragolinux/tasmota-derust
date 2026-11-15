@@ -12,11 +12,14 @@ use crate::Notify;
 use crate::config::BrokerConfig;
 
 /// Topics subscribed on every (re)connection.
+/// Answers first: LWT and discovery messages make the app ask for a device's status, and
+/// the answer must not arrive before the app listens to stat/ (old Tasmota answers in
+/// separate messages, some of which would be lost).
 const BASE_TOPICS: &[&str] = &[
-    "tasmota/discovery/+/config",
-    "+/+/LWT",
-    "tele/+/+",
     "stat/+/+",
+    "tele/+/+",
+    "+/+/LWT",
+    "tasmota/discovery/+/config",
 ];
 
 #[derive(Debug)]

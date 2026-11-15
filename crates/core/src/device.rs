@@ -13,6 +13,13 @@ pub const UPGRADE_TIMEOUT: Duration = Duration::from_secs(8 * 60);
 /// A device that has not answered a status query within this time counts as unreachable,
 /// whatever its (possibly stale, retained) LWT says.
 pub const NO_ANSWER_AFTER: Duration = Duration::from_secs(30);
+/// The status query is sent again after this long without an answer, up to QUERY_TRIES times.
+pub const QUERY_RETRY: Duration = Duration::from_secs(5);
+pub const QUERY_TRIES: u8 = 3;
+/// Tasmota acknowledges "Upgrade 1" at once; without that, the commands are sent again
+/// after this long, and the step fails after twice this long.
+pub const UPGRADE_ACK: Duration = Duration::from_secs(15);
+const RECONNECTED: &str = "Reconnected during the download, waiting for the restart…";
 
 fn default_prefixes() -> [String; 3] {
     ["cmnd".into(), "stat".into(), "tele".into()]
@@ -44,6 +51,10 @@ pub struct Upgrade {
     pub target: Option<[u32; 3]>,
     /// For a step of the upgrade path: (step, steps).
     pub step: Option<(usize, usize)>,
+    /// The commands that started it (OtaUrl, Upgrade 1): sent again once when the device
+    /// does not acknowledge them (it can miss commands right after it reconnects).
+    pub commands: Vec<Action>,
+    pub resent: bool,
 }
 
 /// Why an upgrade did not start.
@@ -86,6 +97,11 @@ pub struct Device {
     pub answered: bool,
     /// When a status query was sent that has not been answered yet.
     pub asked: Option<Instant>,
+    /// A STATUS answer came since the last LWT.
+    pub status_seen: bool,
+    /// When the full status was last asked, and how many times since the last LWT.
+    pub queried_at: Option<Instant>,
+    pub query_tries: u8,
 
     pub device_name: Option<String>,
     pub friendly_name: Option<String>,
@@ -271,6 +287,8 @@ impl Device {
         self.queried = false;
         self.answered = false;
         self.asked = None;
+        self.status_seen = false;
+        self.query_tries = 0;
         if let Some(u) = &mut self.upgrade {
             if !online && u.is_active() {
                 u.phase = UpgradePhase::Restarting;
@@ -345,6 +363,9 @@ impl Device {
     }
 
     fn parse_status(&mut self, v: &Value) {
+        if v.as_object().is_some_and(|o| o.contains_key("StatusMEM")) {
+            self.status_seen = true;
+        }
         if let Some(s) = v.get("Status") {
             set_str(&mut self.device_name, s, "DeviceName");
             match s.get("FriendlyName") {
@@ -374,7 +395,14 @@ impl Device {
             set_str(&mut self.core, s, "Core");
             set_str(&mut self.sdk, s, "SDK");
             set_str(&mut self.hardware, s, "Hardware");
-            self.check_upgrade_finished();
+            // Restarted during the upgrade only if it has been up for less time than the
+            // upgrade has been running (a device configured just before can have a small
+            // uptime without restarting for the upgrade).
+            let booted = match (&self.upgrade, self.current_uptime()) {
+                (Some(u), Some(up)) => up < u.started.elapsed().as_secs() + 5,
+                _ => false,
+            };
+            self.check_upgrade_finished(booted);
         }
         if let Some(s) = v.get("StatusMEM") {
             set_i64(&mut self.program_size, s, "ProgramSize");
@@ -403,6 +431,12 @@ impl Device {
         let i1 = get("Info1");
         set_str(&mut self.module, i1, "Module");
         set_str(&mut self.version, i1, "Version");
+        // Sent at every boot: also tells when an upgrade step has finished, even if the
+        // status query got lost.
+        if i1.get("Version").is_some() {
+            // INFO1 is sent at boot only: the device did restart.
+            self.check_upgrade_finished(true);
+        }
         set_str(&mut self.group_topic, i1, "GroupTopic");
         let i2 = get("Info2");
         set_str(&mut self.hostname, i2, "Hostname");
@@ -465,12 +499,24 @@ impl Device {
         self.parse_status(v);
     }
 
-    fn check_upgrade_finished(&mut self) {
+    /// `booted`: the device has just restarted (INFO1, or a small uptime). Tasmota 6.x
+    /// drops and restores its MQTT connection while it downloads, before it restarts: a
+    /// status with the old version and a long uptime means "still downloading".
+    fn check_upgrade_finished(&mut self, booted: bool) {
         let version = self.version.clone().unwrap_or_default();
         let Some(u) = &mut self.upgrade else { return };
         let lower = version.to_ascii_lowercase();
         let from = u.from.clone().unwrap_or_else(|| "?".into());
         let changed = short_version(&from) != short_version(&version);
+        let intermediate = lower.contains("safeboot") || lower.contains("minimal");
+        if changed
+            && !intermediate
+            && matches!(u.phase, UpgradePhase::Sent | UpgradePhase::Progress(_))
+        {
+            // Back with another version without an LWT "Offline" in between: Tasmota 7 and
+            // later disconnect cleanly when they restart, so the broker sends no LWT.
+            u.phase = UpgradePhase::Restarting;
+        }
         match &u.phase {
             // ESP8266 goes through tasmota-minimal, ESP32 through its safeboot partition:
             // the real firmware comes after one more restart.
@@ -515,6 +561,8 @@ impl Device {
                         target[1],
                         target[2]
                     ))
+                } else if !booted {
+                    UpgradePhase::Progress(RECONNECTED.into())
                 } else {
                     UpgradePhase::Failed(format!(
                         "Restarted, still {}: the step did not take. Check free flash and OtaUrl, then retry.",
@@ -529,6 +577,8 @@ impl Device {
                         short_version(&from),
                         short_version(&version)
                     ))
+                } else if !booted {
+                    UpgradePhase::Progress(RECONNECTED.into())
                 } else {
                     UpgradePhase::Done(format!("Restarted, still {}", short_version(&version)))
                 };
@@ -677,6 +727,8 @@ impl Store {
             return;
         }
         d.queried = true;
+        d.queried_at = Some(Instant::now());
+        d.query_tries = 1;
         if !d.answered {
             d.asked = Some(Instant::now());
         }
@@ -872,18 +924,58 @@ impl Store {
             phase: UpgradePhase::Sent,
             target,
             step,
+            commands: out.clone(),
+            resent: false,
         });
         Ok(out)
     }
 
-    pub fn check_timeouts(&mut self) {
+    /// Upgrade timeouts, and the status query asked again when it got no answer: Tasmota
+    /// publishes its LWT "Online" before it subscribes to its command topic, so a query
+    /// sent right away can be lost.
+    pub fn check_timeouts(&mut self) -> Vec<Action> {
+        let mut out = Vec::new();
+        let again: Vec<String> = self
+            .devices
+            .iter_mut()
+            .filter(|(_, d)| {
+                d.online != Some(false)
+                    && d.queried
+                    && !d.status_seen
+                    && d.query_tries < QUERY_TRIES
+                    && d.queried_at.is_some_and(|t| t.elapsed() >= QUERY_RETRY)
+            })
+            .map(|(k, d)| {
+                d.query_tries += 1;
+                d.queried_at = Some(Instant::now());
+                k.clone()
+            })
+            .collect();
+        for k in again {
+            self.query(&k, &mut out);
+        }
         for d in self.devices.values_mut() {
+            if let Some(u) = &mut d.upgrade
+                && matches!(u.phase, UpgradePhase::Sent)
+            {
+                if !u.resent && u.started.elapsed() > UPGRADE_ACK {
+                    u.resent = true;
+                    out.extend(u.commands.iter().cloned());
+                } else if u.resent && u.started.elapsed() > UPGRADE_ACK * 2 {
+                    u.phase = UpgradePhase::Failed(
+                        "The device did not answer the upgrade command (sent twice): nothing was \
+                         installed. Check it is reachable, then try again."
+                            .into(),
+                    );
+                }
+            }
             if let Some(u) = &mut d.upgrade {
                 if u.is_active() && u.started.elapsed() > UPGRADE_TIMEOUT {
                     u.phase = UpgradePhase::Failed("No answer after 8 minutes".into());
                 }
             }
         }
+        out
     }
 }
 
@@ -1010,8 +1102,15 @@ mod tests {
         assert_eq!(s.devices["credenza"].power[1], Some(true));
     }
 
+    /// A full status answer of a device that has just booted.
     fn status_fwr(version: &str) -> String {
-        format!(r#"{{"StatusFWR":{{"Version":"{version}","Core":"3_1_3"}}}}"#)
+        status_up(version, "0T00:00:01")
+    }
+
+    fn status_up(version: &str, uptime: &str) -> String {
+        format!(
+            r#"{{"StatusPRM":{{"Uptime":"{uptime}"}},"StatusFWR":{{"Version":"{version}","Core":"3_1_3"}},"StatusMEM":{{"ProgramSize":500,"Free":400}}}}"#
+        )
     }
 
     fn sent(out: &[Action], cmd: &str) -> bool {
@@ -1148,6 +1247,167 @@ mod tests {
         let u = s.devices["a8t"].upgrade.as_ref().unwrap();
         assert!(
             matches!(&u.phase, UpgradePhase::Done(m) if m == "Upgraded 13.3.0 → 16.0.0"),
+            "{:?}",
+            u.phase
+        );
+    }
+
+    #[test]
+    fn status_query_is_asked_again_when_lost() {
+        let mut s = Store::default();
+        assert!(sent(&s.handle("tele/sw/LWT", "Online"), "/STATUS"));
+        // Lost (Tasmota was not subscribed yet): nothing comes back.
+        assert!(s.check_timeouts().is_empty(), "not before QUERY_RETRY");
+        s.devices.get_mut("sw").unwrap().queried_at = Some(long_ago(QUERY_RETRY * 2));
+        assert!(sent(&s.check_timeouts(), "/STATUS"));
+        s.handle("stat/sw/STATUS0", &status_fwr("7.2.0(lite)"));
+        s.devices.get_mut("sw").unwrap().queried_at = Some(long_ago(QUERY_RETRY * 2));
+        assert!(s.check_timeouts().is_empty(), "answered: no more queries");
+    }
+
+    #[test]
+    fn reconnect_during_download_is_not_a_failure() {
+        let mut s = Store::default();
+        s.handle("tele/sw/LWT", "Online");
+        s.handle("stat/sw/STATUS0", &status_up("6.7.1(basic)", "0T00:00:50"));
+        s.devices.get_mut("sw").unwrap().upgrade = Some(Upgrade {
+            started: Instant::now(),
+            from: Some("6.7.1(basic)".into()),
+            phase: UpgradePhase::Progress("Version 6.7.1 from …".into()),
+            target: Some([7, 2, 0]),
+            step: Some((1, 4)),
+            commands: Vec::new(),
+            resent: false,
+        });
+        // Tasmota 6.x drops MQTT while it downloads and comes back, still on 6.7.1. Its
+        // uptime is small (configured a minute ago) but longer than the upgrade has run.
+        s.handle("tele/sw/LWT", "Offline");
+        s.handle("tele/sw/LWT", "Online");
+        s.handle("stat/sw/STATUS0", &status_up("6.7.1(basic)", "0T00:01:02"));
+        let u = s.devices["sw"].upgrade.as_ref().unwrap();
+        assert!(
+            u.is_active() && !matches!(u.phase, UpgradePhase::Failed(_)),
+            "{:?}",
+            u.phase
+        );
+        // Then it restarts with the new firmware.
+        s.handle("tele/sw/LWT", "Offline");
+        s.handle("tele/sw/LWT", "Online");
+        s.handle(
+            "tele/sw/INFO1",
+            r#"{"Module":"Sonoff Basic","Version":"7.2.0(lite)"}"#,
+        );
+        let u = s.devices["sw"].upgrade.as_ref().unwrap();
+        assert!(
+            matches!(&u.phase, UpgradePhase::Done(m) if m.starts_with("Upgraded 6.7.1 → 7.2.0")),
+            "{:?}",
+            u.phase
+        );
+        // A real restart on the old version is still a failure.
+        let mut s = Store::default();
+        s.handle("tele/sw/LWT", "Online");
+        s.handle("stat/sw/STATUS0", &status_fwr("6.7.1(basic)"));
+        s.devices.get_mut("sw").unwrap().upgrade = Some(Upgrade {
+            started: Instant::now(),
+            from: Some("6.7.1(basic)".into()),
+            phase: UpgradePhase::Restarting,
+            target: Some([7, 2, 0]),
+            step: Some((1, 4)),
+            commands: Vec::new(),
+            resent: false,
+        });
+        s.handle(
+            "tele/sw/INFO1",
+            r#"{"Module":"Sonoff Basic","Version":"6.7.1(basic)"}"#,
+        );
+        assert!(matches!(
+            s.devices["sw"].upgrade.as_ref().unwrap().phase,
+            UpgradePhase::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn restart_without_lwt_offline_still_finishes() {
+        let mut s = Store::default();
+        s.handle("tele/sw/LWT", "Online");
+        s.handle("stat/sw/STATUS0", &status_fwr("7.2.0(lite)"));
+        s.devices.get_mut("sw").unwrap().upgrade = Some(Upgrade {
+            started: Instant::now(),
+            from: Some("7.2.0(lite)".into()),
+            phase: UpgradePhase::Sent,
+            target: Some([8, 5, 1]),
+            step: Some((1, 3)),
+            commands: Vec::new(),
+            resent: false,
+        });
+        s.handle("stat/sw/RESULT", r#"{"Upgrade":"Successful. Restarting"}"#);
+        // Clean disconnect: no "Offline", the device is simply back with the new version.
+        s.handle("tele/sw/LWT", "Online");
+        s.handle(
+            "tele/sw/INFO1",
+            r#"{"Module":"Sonoff Basic","Version":"8.5.1(lite)"}"#,
+        );
+        let u = s.devices["sw"].upgrade.as_ref().unwrap();
+        assert!(
+            matches!(&u.phase, UpgradePhase::Done(m) if m.starts_with("Upgraded 7.2.0 → 8.5.1")),
+            "{:?}",
+            u.phase
+        );
+    }
+
+    #[test]
+    fn unanswered_upgrade_is_sent_again_then_fails() {
+        let mut s = Store::default();
+        s.handle("tele/sw/LWT", "Online");
+        s.handle("stat/sw/STATUS0", &status_fwr("16.0.0(tasmota)"));
+        let sent_first = s.start_upgrade("sw", &Default::default()).unwrap();
+        s.devices
+            .get_mut("sw")
+            .unwrap()
+            .upgrade
+            .as_mut()
+            .unwrap()
+            .started = long_ago(UPGRADE_ACK + Duration::from_secs(1));
+        let again = s.check_timeouts();
+        assert_eq!(again.len(), sent_first.len(), "same commands once more");
+        assert!(s.check_timeouts().is_empty(), "only once");
+        s.devices
+            .get_mut("sw")
+            .unwrap()
+            .upgrade
+            .as_mut()
+            .unwrap()
+            .started = long_ago(UPGRADE_ACK * 3);
+        s.check_timeouts();
+        assert!(matches!(
+            s.devices["sw"].upgrade.as_ref().unwrap().phase,
+            UpgradePhase::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn info1_finishes_an_upgrade_step() {
+        let mut s = Store::default();
+        s.handle("tele/sw/LWT", "Online");
+        s.handle("stat/sw/STATUS0", &status_fwr("6.7.1(basic)"));
+        s.devices.get_mut("sw").unwrap().upgrade = Some(Upgrade {
+            started: Instant::now(),
+            from: Some("6.7.1(basic)".into()),
+            phase: UpgradePhase::Restarting,
+            target: Some([7, 2, 0]),
+            step: Some((1, 4)),
+            commands: Vec::new(),
+            resent: false,
+        });
+        s.handle("tele/sw/LWT", "Online");
+        // Only INFO1 arrives, the status query is lost.
+        s.handle(
+            "tele/sw/INFO1",
+            r#"{"Module":"Sonoff Basic","Version":"7.2.0(lite)"}"#,
+        );
+        let u = s.devices["sw"].upgrade.as_ref().unwrap();
+        assert!(
+            matches!(&u.phase, UpgradePhase::Done(m) if m.starts_with("Upgraded 6.7.1 → 7.2.0")),
             "{:?}",
             u.phase
         );

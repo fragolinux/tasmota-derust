@@ -54,6 +54,9 @@ struct Fake {
     hsb: (i64, i64),
     ct: i64,
     white: i64,
+    /// Like real Tasmota, after (re)connecting it publishes its LWT before it subscribes to
+    /// its command topic: commands arriving before this instant are lost.
+    deaf_until: Option<Instant>,
 }
 
 const FLASH_KB: i64 = 1000;
@@ -349,6 +352,7 @@ fn devices() -> Vec<Fake> {
                     hsb: (30, 80),
                     ct: 300,
                     white: 0,
+                    deaf_until: None,
                 }
             },
         )
@@ -601,7 +605,10 @@ fn handle(client: &Client, fakes: &Arc<Mutex<Vec<Fake>>>, topic: &str, cmd: &str
         let _ = client.try_publish(t, QoS::AtMostOnce, false, p.into_bytes());
     };
     let mut all = fakes.lock().unwrap();
-    let Some(f) = all.iter_mut().find(|f| f.topic == topic && f.online) else {
+    let Some(f) = all
+        .iter_mut()
+        .find(|f| f.topic == topic && f.online && f.deaf_until.is_none_or(|t| Instant::now() >= t))
+    else {
         return;
     };
     let stat = |s: &str| format!("stat/{topic}/{s}");
@@ -732,7 +739,13 @@ fn handle(client: &Client, fakes: &Arc<Mutex<Vec<Fake>>>, topic: &str, cmd: &str
                 None
             };
             let (c, fk, t) = (client.clone(), fakes.clone(), topic.to_string());
+            let old = now.first().is_some_and(|m| *m < 7);
             thread::spawn(move || {
+                if old {
+                    // Tasmota 6.x drops and restores MQTT while it downloads, before it
+                    // restarts: back online for a while, still on the old version.
+                    reconnect_now(&c, &fk, &t);
+                }
                 if let Some((mv, mb, mp, _)) = minimal {
                     restart_now(&c, &fk, &t, |f| {
                         f.version = mv.into();
@@ -792,6 +805,21 @@ fn restart(
 }
 
 /// Restart on the calling thread: offline, `change` applied, online again.
+/// MQTT dropped and restored without a restart (same version, uptime goes on).
+fn reconnect_now(client: &Client, fakes: &Mutex<Vec<Fake>>, topic: &str) {
+    let pub_ = |t: String, p: String| {
+        let _ = client.try_publish(t, QoS::AtMostOnce, true, p.into_bytes());
+    };
+    thread::sleep(Duration::from_secs(1));
+    pub_(format!("tele/{topic}/LWT"), "Offline".into());
+    thread::sleep(Duration::from_secs(3));
+    if let Some(f) = fakes.lock().unwrap().iter_mut().find(|f| f.topic == topic) {
+        f.deaf_until = Some(Instant::now() + Duration::from_millis(1500));
+    }
+    pub_(format!("tele/{topic}/LWT"), "Online".into());
+    thread::sleep(Duration::from_secs(8));
+}
+
 fn restart_now(
     client: &Client,
     fakes: &Mutex<Vec<Fake>>,
@@ -813,6 +841,7 @@ fn restart_now(
     f.uptime_base = 0;
     f.boot_count += 1;
     f.restart_reason = "Software/System restart";
+    f.deaf_until = Some(Instant::now() + Duration::from_millis(1500));
     pub_(format!("tele/{topic}/LWT"), "Online".into(), true);
     let info1 = json!({ "Info1": { "Module": f.module, "Version": f.full_version(), "FallbackTopic": format!("cmnd/DVES_{topic}_fb/"), "GroupTopic": "tasmotas" } });
     pub_(format!("tele/{topic}/INFO1"), info1.to_string(), false);

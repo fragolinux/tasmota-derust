@@ -781,7 +781,12 @@ impl DerustApp {
                 .cell_layout(Layout::left_to_right(Align::Center))
                 .column(TCol::initial(240.0).at_least(120.0).clip(true));
             for c in &cols {
-                tb = tb.column(TCol::initial(c.width()).at_least(28.0).clip(true));
+                tb = tb.column(if *c == Col::Update {
+                    // Upgrade progress texts vary in length: the column fits them.
+                    TCol::auto().at_least(c.width())
+                } else {
+                    TCol::initial(c.width()).at_least(28.0).clip(true)
+                });
             }
             tb.header(ROW_HEIGHT, |mut h| {
                 h.col(|ui| header_cell(ui, "Device", sort.is_none(), desc, None, actions));
@@ -1054,7 +1059,8 @@ impl DerustApp {
 impl eframe::App for DerustApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.process_events();
-        self.store.check_timeouts();
+        let again = self.store.check_timeouts();
+        self.apply(again);
         let ctx = ui.ctx().clone();
         #[cfg(feature = "screenshots")]
         self.screenshot_tick(&ctx);
@@ -1612,9 +1618,16 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
             let plan = ota::plan_info(d, ci.targets, ci.sizes);
             // Release ↔ development: changes the OtaUrl only; the upgrade button then shows
             // whether there is something to install.
+            // Fixed-width slot, also when there is no channel button, so what follows
+            // starts at the same place on every row.
+            const CHANNEL_W: f32 = 62.0;
             if !busy {
                 let dev = ota::channel(d.ota_url.as_deref()) == ota::Channel::Development;
-                if let Some(url) = d.ota_url.as_deref().and_then(|u| ota::channel_url(u, !dev)) {
+                let url = d.ota_url.as_deref().and_then(|u| ota::channel_url(u, !dev));
+                if url.is_none() {
+                    ui.add_space(CHANNEL_W + ui.spacing().item_spacing.x);
+                }
+                if let Some(url) = url {
                     let label = if dev { "Dev" } else { "Release" };
                     let hint = format!(
                         "OtaUrl points to the {} builds. Click to use the {} builds:\n{url}",
@@ -1622,7 +1635,12 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
                         if dev { "release" } else { "development" },
                     );
                     if ui
-                        .add_enabled(online, egui::Button::new(label).small())
+                        .add_enabled(
+                            online,
+                            egui::Button::new(label)
+                                .small()
+                                .min_size(vec2(CHANNEL_W, 0.0)),
+                        )
                         .on_hover_text(hint)
                         .clicked()
                     {
@@ -1675,7 +1693,7 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
                         ui.label("Restarting…");
                     }
                     UpgradePhase::Done(m) => {
-                        ui.colored_label(GREEN, arrows(m));
+                        ui.colored_label(GREEN, arrows(m)).on_hover_text(arrows(m));
                     }
                     UpgradePhase::Failed(m) => {
                         ui.colored_label(RED, arrows(m)).on_hover_text(arrows(m));

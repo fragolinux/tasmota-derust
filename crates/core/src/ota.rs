@@ -518,6 +518,14 @@ pub fn plan_info(d: &Device, targets: &Targets, sizes: &Sizes) -> PlanInfo {
                 info.can_start = true;
                 return info;
             }
+            // The free flash changes with every image: only a status answer from the
+            // firmware running now counts (after a restart, the old one is stale).
+            if !d.status_seen {
+                info.details.push(
+                    "Waiting for the device's status (free flash) since its last restart…".into(),
+                );
+                return info;
+            }
             let free = d.free.and_then(|f| u64::try_from(f).ok()).map(|f| f * 1024);
             let Some(free) = free else {
                 info.details.push(
@@ -780,6 +788,7 @@ mod tests {
         d.version = Some(version.into());
         d.free = Some(free_kb);
         d.hardware = Some("ESP8266EX".into());
+        d.status_seen = true;
         d
     }
 
@@ -803,6 +812,12 @@ mod tests {
         );
         let no = plan_info(&device("6.7.1(sonoff)", 300), &Targets::default(), &sizes);
         assert!(!no.can_start, "{no:?}");
+        let mut stale = device("6.7.1(sonoff)", 600);
+        stale.status_seen = false;
+        assert!(
+            !plan_info(&stale, &Targets::default(), &sizes).can_start,
+            "no fresh status yet"
+        );
         let mut unknown = device("6.7.1(sonoff)", 0);
         unknown.free = None;
         assert!(!plan_info(&unknown, &Targets::default(), &sizes).can_start);
