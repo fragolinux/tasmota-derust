@@ -6,8 +6,11 @@
 #   make linux         Linux x64 (glibc 2.31+): desktop app + web server
 #   make apk           Android APK
 #   make mac-desktop | mac-web | win-desktop | win-web | linux-desktop | linux-web
-#   make package       release archives of whatever is in dist/ -> dist/release/
-#   make scan          Trivy vulnerability scan of the built artifacts -> dist/security/
+#   make package       Trivy scan + release files of whatever is in dist/ -> dist/release/,
+#                      reports -> dist/security/
+#   make release       checks, version bump from the Conventional Commits since the last tag,
+#                      build + scan, signed commit and tag, push (VERSION=x.y.z to force it,
+#                      DRY_RUN=1 to stop before committing; see scripts/release.sh)
 #   make sizes         list what is in dist/
 #   make release-key   create the APK signing key (once; see DEVELOPMENT.md)
 #   make lock-android  refresh android/app/gradle.lockfile after changing Android dependencies
@@ -15,7 +18,7 @@
 #   make clean         remove dist/ (cargo's target/ is left alone)
 #
 # Builds use the size-optimized `dist` Cargo profile. With cargo-auditable installed, every
-# binary embeds its dependency list, so `make scan` (Trivy) can check the actual artifacts.
+# binary embeds its dependency list, so `make package` (Trivy) can check the actual artifacts.
 
 CARGO        ?= cargo
 DIST         := dist
@@ -59,7 +62,7 @@ APK_DIR   := $(DIST)/android
 MAC_APP   := $(MAC_DIR)/$(APP_NAME).app
 
 .PHONY: all mac windows linux desktop web mac-desktop mac-web win-desktop win-web \
-        linux-desktop linux-web apk package scan sizes clean check-tools release-key lock-android
+        linux-desktop linux-web apk package release sizes clean check-tools release-key lock-android
 
 all: mac windows linux apk
 	@$(MAKE) --no-print-directory sizes
@@ -143,10 +146,11 @@ lock-android:
 # ---------------------------------------------------------------------- release
 
 package:
-	bash scripts/package.sh $(DIST) $(DIST)/release $(VERSION)
+	bash scripts/package.sh $(DIST) $(DIST)/release $(DIST)/security $(VERSION)
 
-scan:
-	bash scripts/scan-artifacts.sh $(DIST)/release $(DIST)/security
+# VERSION is passed on only when given on the command line (make release VERSION=0.2.0).
+release:
+	bash scripts/release.sh $(if $(filter command line,$(origin VERSION)),$(VERSION))
 
 # ---------------------------------------------------------------------- helpers
 

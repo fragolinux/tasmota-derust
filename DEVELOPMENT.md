@@ -78,8 +78,8 @@ builds everything and prints the sizes. Then:
 
 | Command | What it does |
 |---|---|
-| `make package` | release archives of `dist/` in `dist/release/`, with `SHA256SUMS` |
-| `make scan` | Trivy scan of those archives, reports in `dist/security/` |
+| `make package` | Trivy scan, then release files of `dist/` in `dist/release/` (reports in `dist/security/`) |
+| `make release` | checks, version bump, build + scan, signed commit and tag, push (see [Releases](#releases-and-ci)) |
 | `make sizes` | sizes of what is in `dist/` |
 | `make release-key` | creates the APK signing key (once, see [Releases](#releases-and-ci)) |
 | `make lock-android` | refreshes `android/app/gradle.lockfile` after changing Android dependencies |
@@ -129,8 +129,8 @@ apksigner sign --ks ~/.android/tasmota-derust-release.jks --ks-key-alias tasmota
     --out tasmota-derust.apk aligned.apk
 # (zipalign and apksigner are in $ANDROID_HOME/build-tools/<version>/)
 
-# Archives and checksums
-bash scripts/package.sh dist dist/release 0.1.0
+# Trivy scan, release files and checksums
+bash scripts/package.sh dist dist/release dist/security 0.1.0
 ```
 
 For day-to-day work: `cargo run --release` (desktop app), `cargo run --release -p
@@ -153,23 +153,26 @@ trivy fs --scanners vuln,secret --skip-dirs target --skip-dirs dist \
 **The files you ship** (after `make` and `make package`):
 
 ```
-make scan        # = bash scripts/scan-artifacts.sh dist/release dist/security
+make package     # = bash scripts/package.sh dist dist/release dist/security <version>
 ```
 
-Each archive is unpacked and scanned with `trivy rootfs`. Thanks to cargo-auditable, Trivy
-reads the exact crates inside each binary (and inside the APK's native library); the APK's
-Java/Kotlin side is checked through the Gradle lockfile. For every archive you get
-`<name>.trivy.txt` (readable table), `<name>.trivy.json` and `<name>.cdx.json` (CycloneDX
-SBOM), plus `SUMMARY.md`. The scan fails when it finds a HIGH or CRITICAL vulnerability that
-already has a fixed version, or a binary without dependency data (built without
-cargo-auditable); `SCAN_NO_FAIL=1 make scan` only reports.
+`make package` scans before it packs: the content of each release file (program and
+licenses) is staged and scanned with `trivy rootfs`, and nothing is packed if the scan fails.
+Thanks to cargo-auditable, Trivy reads the exact crates inside each binary (and inside the
+APK's native library); the APK's Java/Kotlin side is checked through the Gradle lockfile.
 
-By hand, for a single file:
+Release files: macOS desktop app `.dmg` (drag the app to *Applications*), macOS web server and
+Windows `.zip`, Linux `.tar.gz` (the executable bit is kept), Android the `.apk` alone. Every
+archive and disk image contains the program, `LICENSE-MIT`, `LICENSE-APACHE`,
+`TRIVY-REPORT.txt` / `TRIVY-REPORT.json` (scan of exactly those files) and `SHA256SUMS`
+(every file inside; `shasum -a 256 -c SHA256SUMS`). `dist/release/SHA256SUMS` covers the
+release files themselves.
 
-```
-mkdir /tmp/scan && tar -xzf dist/release/tasmota-derust-web-0.1.0-linux-x64.tar.gz -C /tmp/scan
-trivy rootfs --scanners vuln /tmp/scan
-```
+`dist/security/` gets, per release file, `<name>.trivy.txt` (readable table),
+`<name>.trivy.json` and `<name>.cdx.json` (CycloneDX SBOM), plus `SUMMARY.md`. The scan fails
+when it finds a HIGH or CRITICAL vulnerability that already has a fixed version, or a binary
+without dependency data (built without cargo-auditable); `SCAN_NO_FAIL=1 make package` only
+reports. The `.dmg` is made with `hdiutil`, so the macOS desktop app is packed on a Mac only.
 
 # Development
 
@@ -207,10 +210,10 @@ GitHub Actions (`.github/workflows/`):
   scan above. It fails on committed secrets and on HIGH/CRITICAL vulnerabilities that have a
   fix. Nothing is built.
 - **Release** (`release.yml`), only when a version tag is pushed: builds macOS, Linux, Windows
-  and the APK, smoke-tests the Linux web server, packs everything, scans **the finished
-  archives** with Trivy, and only then publishes the GitHub release. A failing scan stops it
-  before anything is published. The scan summary goes into the release notes; the full
-  reports and SBOMs are attached as `security-reports.zip`.
+  and the APK, smoke-tests the Linux web server, scans what goes into each release file
+  with Trivy, packs it (report and checksums inside), and only then publishes the GitHub
+  release. A failing scan stops it before anything is published. The scan summary goes into
+  the release notes; all reports and SBOMs are attached as `security-reports.zip`.
 
 One-time setup, for signed APKs:
 
@@ -221,13 +224,32 @@ One-time setup, for signed APKs:
    `ANDROID_KEYSTORE_BASE64` (output of `base64 -i ~/.android/tasmota-derust-release.jks`)
    and `ANDROID_KEYSTORE_PASSWORD`.
 
-To release: set the version in `Cargo.toml` (`[workspace.package]`; the Android app takes its
-version from there too), commit, then tag with the same version and push the tag:
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
+`feat: ...`, `fix: ...`, `perf:`, `docs:`, `chore:`, `ci:`, `build:`, `refactor:`, `test:`,
+`style:`, `revert:` (an optional scope: `fix(android): ...`). The release version comes from
+them.
+
+To release, on the Mac:
 
 ```
-git tag v0.2.0
-git push origin v0.2.0
+make release                    # next version from the commits since the last tag
+make release VERSION=1.0.0      # a given version: majors, pre-releases (1.0.0-rc1), overrides
+make release DRY_RUN=1          # everything up to the commit, then the bump is undone
 ```
+
+Without `VERSION`, since the last tag pushed to origin: any `feat` makes a minor release
+(0.1.3 -> 0.2.0), otherwise any `fix`/`perf` a patch (0.1.3 -> 0.1.4); only `docs`, `chore`,
+`ci` and the like make no release. A breaking change (`feat!:`, `BREAKING CHANGE:`), a commit
+that is not a Conventional Commit, or a pre-release as last tag stop it: then give `VERSION`.
+Majors are never automatic.
+
+`make release` stops at the first failure: on `main`, clean tree, not behind `origin/main`;
+`cargo test`; Trivy source scan (as `security.yml`); `actionlint`; official Gradle wrapper;
+version bump in `Cargo.toml` (`[workspace.package]`, the Android app reads it too) and
+`Cargo.lock`; `make` (every target); `make package` (Trivy scan of the release files). If any of
+these fails the bump is put back. Then a signed commit `chore(release): vX.Y.Z`, a signed tag,
+a summary, a confirmation (`RELEASE_CONFIRM=yes` skips it) and
+`git push --atomic origin main vX.Y.Z`. The Release workflow does the rest.
 
 The workflow checks that the tag matches `Cargo.toml`. Tags with a suffix (`v0.2.0-rc1`)
 become pre-releases. *Actions > Release > Run workflow* runs it as a dry run: everything is

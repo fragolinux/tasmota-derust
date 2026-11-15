@@ -8,5 +8,5 @@ about anything that could send a command without the user's intent are especiall
 as are the usual ones about dependencies and the web server.
 
 Every push is checked with Trivy (dependencies and committed secrets), and every release is
-scanned again on the finished files before it is published: see `security-reports.zip` in
-each release and "Releases and CI" in DEVELOPMENT.md.
+scanned again, on exactly the files that are shipped, before it is published: each archive
+contains its own `TRIVY-REPORT.txt`, and `security-reports.zip` in each release has them all and "Releases and CI" in DEVELOPMENT.md.

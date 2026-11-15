@@ -19,20 +19,23 @@ Ready-made builds are attached to each [GitHub release](../../releases):
 
 | | Desktop app | Web server |
 |---|---|---|
-| macOS (Apple Silicon) | `tasmota-derust-<version>-macos-arm64.zip` | `tasmota-derust-web-<version>-macos-arm64.tar.gz` |
+| macOS (Apple Silicon) | `tasmota-derust-<version>-macos-arm64.dmg` | `tasmota-derust-web-<version>-macos-arm64.zip` |
 | Windows x64 | `tasmota-derust-<version>-windows-x64.zip` | `tasmota-derust-web-<version>-windows-x64.zip` |
 | Linux x64 (glibc 2.31+) | `tasmota-derust-<version>-linux-x64.tar.gz` | `tasmota-derust-web-<version>-linux-x64.tar.gz` |
 | Android 13+ | `tasmota-derust-<version>.apk` | |
 
 The builds are not notarized or code-signed by a store:
 
-- **macOS**: the first time, right-click the app and choose *Open*.
+- **macOS**: open the `.dmg` and drag the app to *Applications*; the first time, right-click
+  the app and choose *Open*.
 - **Windows**: if SmartScreen appears, choose *More info > Run anyway*.
 - **Android**: allow installing apps from the app you open the APK with (Files, a browser, a
   chat app); Play Protect may ask for confirmation because the app is not from the Play Store.
 
-Every release also has `SHA256SUMS` and `security-reports.zip` (vulnerability scan and SBOM
-of each file, see [Releases and CI](DEVELOPMENT.md#releases-and-ci)).
+Every archive and disk image contains the licenses, its Trivy vulnerability report
+(`TRIVY-REPORT.txt`) and `SHA256SUMS` of the files inside. The release also has `SHA256SUMS`
+of the downloads and `security-reports.zip` (all reports and SBOMs, see
+[Releases and CI](DEVELOPMENT.md#releases-and-ci)).
 
 ## Features (v0.1)
 

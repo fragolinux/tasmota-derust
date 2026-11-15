@@ -21,3 +21,6 @@
 # Editors
 /.idea/
 /.vscode/
+
+# Local session notes (mention the user's network)
+/HANDOFF.md

@@ -2,11 +2,12 @@
 # It can also be started by hand (Actions > Release > Run workflow) as a dry run: everything
 # is built and scanned, nothing is published.
 #
-#   check -> build (macOS, Linux + Windows, Android) -> Trivy scan of the archives -> release
+#   check -> build + Trivy scan + pack (macOS, Linux + Windows, Android) -> reports -> release
 #
-# The scan runs on the finished archives, before anything is published: a fixable HIGH or
-# CRITICAL vulnerability stops the release. Its summary goes into the release notes, and
-# the full reports plus CycloneDX SBOMs are attached as security-reports.zip.
+# Each build job runs `make package`: it scans what goes into every release file and packs
+# it only if the scan passes (a fixable HIGH or CRITICAL vulnerability stops the release),
+# with the licenses, the Trivy report and SHA256SUMS inside. The summary goes into the
+# release notes, and all reports plus CycloneDX SBOMs are attached as security-reports.zip.
 #
 # Needed repository secrets (see DEVELOPMENT.md, "Releases and CI"):
 #   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD
@@ -26,7 +27,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   TRIVY_VERSION: "0.76.2"
-  TRIVY_SHA256: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+  TRIVY_SHA256_LINUX: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+  TRIVY_SHA256_MACOS: "ae7ea358326960406b703c77b2ac490190797d80b306b5b50c2a27221da0a5b8"
   ZIG_VERSION: "0.17.1"
   ZIG_SHA256: "3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a"
   NDK_VERSION: "30.0.16248370"
@@ -63,15 +65,27 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Tools
         run: cargo install --locked cargo-auditable
-      - name: Build
+      - name: Install Trivy
+        run: |
+          f="trivy_${TRIVY_VERSION}_macOS-ARM64.tar.gz"
+          curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/$f"
+          echo "${TRIVY_SHA256_MACOS}  $f" | shasum -a 256 -c -
+          sudo tar -xzf "$f" -C /usr/local/bin trivy
+      - name: Build, scan and pack
         run: make mac package
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-macos
           path: |
+            dist/release/*.dmg
             dist/release/*.zip
-            dist/release/*.tar.gz
           if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: security-macos
+          path: dist/security/
+          if-no-files-found: ignore
 
   linux-windows:
     name: Build Linux and Windows
@@ -110,7 +124,13 @@ jobs:
           grep -q '"read_only":true' state.json
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8099/api/devices/x/power/1)" = 403
           kill "$pid"
-      - name: Package
+      - name: Install Trivy
+        run: |
+          f="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/$f"
+          echo "${TRIVY_SHA256_LINUX}  $f" | sha256sum -c -
+          sudo tar -xzf "$f" -C /usr/local/bin trivy
+      - name: Scan and pack
         run: make package
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -119,6 +139,12 @@ jobs:
             dist/release/*.zip
             dist/release/*.tar.gz
           if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: security-linux-windows
+          path: dist/security/
+          if-no-files-found: ignore
 
   android:
     name: Build Android
@@ -142,6 +168,12 @@ jobs:
         run: |
           cargo install --locked cargo-auditable cargo-ndk
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" > /dev/null
+      - name: Install Trivy
+        run: |
+          f="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/$f"
+          echo "${TRIVY_SHA256_LINUX}  $f" | sha256sum -c -
+          sudo tar -xzf "$f" -C /usr/local/bin trivy
       - name: Signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -174,10 +206,17 @@ jobs:
           name: release-android
           path: dist/release/*.apk
           if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: security-android
+          path: dist/security/
+          if-no-files-found: ignore
 
   scan:
-    name: Trivy scan of the archives
+    name: Security reports
     needs: [macos, linux-windows, android]
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -185,24 +224,20 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: release-*
-          path: dist/release
+          pattern: security-*
+          path: dist/security
           merge-multiple: true
-      - name: Install Trivy
-        run: |
-          f="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
-          curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/$f"
-          echo "${TRIVY_SHA256}  $f" | sha256sum -c -
-          sudo tar -xzf "$f" -C /usr/local/bin trivy
-      - name: Scan
-        run: bash scripts/scan-artifacts.sh dist/release dist/security
+      # Each build job already stopped on a blocking finding; this one also fails then, so
+      # the release cannot be published from partial results.
       - name: Summary
-        if: always()
-        run: cat dist/security/SUMMARY.md >> "$GITHUB_STEP_SUMMARY" || true
+        run: |
+          python3 scripts/trivy_summary.py dist/security > dist/SUMMARY.md && status=0 || status=$?
+          cat dist/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
       - name: Bundle the reports
         if: always()
         run: |
-          cp dist/security/SUMMARY.md dist/ || true
+          rm -f dist/security/SUMMARY.md dist/security/trivy-version.json
           cd dist/security && zip -q ../security-reports.zip -- * || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -215,8 +250,8 @@ jobs:
 
   release:
     name: Publish the release
-    needs: [check, scan]
-    if: github.ref_type == 'tag'
+    needs: [check, macos, linux-windows, android, scan]
+    if: github.ref_type == 'tag' && !cancelled() && !failure()
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -242,14 +277,16 @@ jobs:
 
           | | Desktop app | Web server |
           |---|---|---|
-          | macOS (Apple Silicon) | \`tasmota-derust-${VERSION}-macos-arm64.zip\` | \`tasmota-derust-web-${VERSION}-macos-arm64.tar.gz\` |
+          | macOS (Apple Silicon) | \`tasmota-derust-${VERSION}-macos-arm64.dmg\` | \`tasmota-derust-web-${VERSION}-macos-arm64.zip\` |
           | Windows x64 | \`tasmota-derust-${VERSION}-windows-x64.zip\` | \`tasmota-derust-web-${VERSION}-windows-x64.zip\` |
           | Linux x64 | \`tasmota-derust-${VERSION}-linux-x64.tar.gz\` | \`tasmota-derust-web-${VERSION}-linux-x64.tar.gz\` |
           | Android 13+ | \`tasmota-derust-${VERSION}.apk\` | |
 
           The apps are not notarized: on macOS open the app with right-click > Open the first
           time; on Windows choose "More info > Run anyway" if SmartScreen asks.
-          Checksums: \`SHA256SUMS\`.
+          Every archive and disk image contains the licenses, its Trivy report
+          (\`TRIVY-REPORT.txt\`) and \`SHA256SUMS\` of the files inside. Checksums of the
+          downloads: \`SHA256SUMS\`.
 
           EOF
           cat security/SUMMARY.md >> notes.md
