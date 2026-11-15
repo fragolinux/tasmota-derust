@@ -47,7 +47,6 @@ import dev.derust.tasmota.core.Snapshot
 import dev.derust.tasmota.fmtDuration
 import dev.derust.tasmota.isOffline
 import dev.derust.tasmota.offlineLabel
-import dev.derust.tasmota.needsUpgradePath
 import dev.derust.tasmota.upgradeBusy
 import dev.derust.tasmota.ui.theme.Green
 import dev.derust.tasmota.ui.theme.Orange
@@ -67,6 +66,7 @@ fun DeviceSheet(
     onToggle: (Int) -> Unit,
     onSwitchAp: (Int) -> Unit,
     onUpgrade: () -> Unit,
+    onSetChannel: (Boolean) -> Unit,
     /** Read-only mode (app-wide). Commands stay tappable and explain why nothing happens. */
     readOnly: Boolean,
     onReadOnly: () -> Unit,
@@ -119,11 +119,19 @@ fun DeviceSheet(
                         Text("Switch to SSId $other")
                     }
                 }
-                if (!d.upgradeBusy) {
+                val plan = d.upgradePlan
+                if (!d.upgradeBusy && d.canSwitchChannel) {
+                    val dev = d.otaChannel == "development"
+                    OutlinedButton(onClick = { onSetChannel(!dev) }, enabled = canCommand) {
+                        Text(if (dev) "Use releases" else "Use dev builds")
+                    }
+                }
+                if (!d.upgradeBusy && !(d.upToDate && plan.kind == "final")) {
+                    val warn = d.outdated || plan.kind == "step"
                     OutlinedButton(
                         onClick = { ask(Confirm.Upgrade) }, enabled = canCommand,
-                        colors = if (d.outdated) ButtonDefaults.outlinedButtonColors(contentColor = Orange) else ButtonDefaults.outlinedButtonColors(),
-                    ) { Text("Upgrade…") }
+                        colors = if (warn) ButtonDefaults.outlinedButtonColors(contentColor = Orange) else ButtonDefaults.outlinedButtonColors(),
+                    ) { Text(plan.button.ifEmpty { "Upgrade…" }) }
                 }
             }
             d.upgradeState?.let { st ->
@@ -198,25 +206,33 @@ fun DeviceSheet(
             onDismissRequest = { confirm = null },
             title = { Text("Upgrade ${d.name}?") },
             text = {
-                Column {
-                    Text("Current: ${d.version ?: "unknown"}\nLatest release: ${s.latest ?: "unknown"}\nOtaUrl: ${d.otaUrl ?: "unknown"}")
-                    Spacer(Modifier.height(10.dp))
-                    Text("The device downloads the firmware from its OtaUrl and restarts. Do not power it off during the upgrade.")
-                    if (d.needsUpgradePath) {
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            "This firmware is old. Tasmota needs intermediate upgrade steps for old versions; " +
-                                "upgrading straight to the latest release can fail.",
-                            color = Orange,
-                        )
+                val plan = d.upgradePlan
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(plan.title, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    val dev = s.latestDev?.let { "\nLatest development: $it" } ?: ""
+                    Text("Current: ${d.version ?: "unknown"}\nLatest release: ${s.latest ?: "unknown"}$dev\nFirmware image: ${plan.url ?: d.otaUrl ?: "unknown"}")
+                    plan.details.forEach {
+                        Spacer(Modifier.height(8.dp))
+                        Text(it)
                     }
-                    if (d.otaUrl != null && !d.otaUrl!!.contains("ota.tasmota.com")) {
-                        Spacer(Modifier.height(10.dp))
-                        Text("This device uses a custom OtaUrl.", color = Orange)
+                    Spacer(Modifier.height(8.dp))
+                    Text("The device downloads the firmware and restarts. Do not power it off during the upgrade.")
+                    plan.warnings.forEach {
+                        Spacer(Modifier.height(8.dp))
+                        Text(it, color = Orange)
+                    }
+                    if (!plan.canStart) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("This upgrade can't start now.", color = Red)
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { confirm = null; onUpgrade() }) { Text("Upgrade") } },
+            confirmButton = {
+                TextButton(onClick = { confirm = null; onUpgrade() }, enabled = d.upgradePlan.canStart) {
+                    Text(if (d.upgradePlan.kind == "step") "Start this step" else "Upgrade")
+                }
+            },
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
         )
         null -> {}

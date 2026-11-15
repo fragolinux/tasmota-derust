@@ -86,6 +86,7 @@ tbody tr.offline td:first-child { font-style: italic; }
 button.ap { cursor: pointer; }
 .ver-old { color: var(--orange); font-weight: 700; }
 .up-state { margin-left: 8px; }
+.app-update { color: var(--orange, #e8912d); font-weight: 600; }
 .up-done { color: var(--green); } .up-failed { color: var(--red); } .up-note { color: var(--muted); }
 .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--muted); border-top-color: transparent;
   border-radius: 50%; animation: spin 1s linear infinite; vertical-align: -2px; margin-right: 4px; }
@@ -356,12 +357,25 @@ function apHtml(d) {
 }
 
 function updateHtml(d) {
-  const busy = d.upgrade && ["sent", "progress", "restarting"].includes(d.upgrade.state);
+  const busy = d.upgrading;
+  const plan = d.upgrade_plan;
+  const dev = d.ota_channel === "development";
   let h = "";
-  if (!busy) {
+  if (!busy && d.can_switch_channel) {
     const dis = d.online !== true ? "disabled" : "";
-    h += `<button class="btn ${d.outdated ? "warn" : ""}" data-act="upgrade" data-topic="${esc(d.topic)}" ${dis}
-      title="${d.outdated ? "A newer release is available" : "Upgrade from OtaUrl"}">Upgrade…</button>`;
+    const tip = `OtaUrl points to the ${dev ? "development" : "release"} builds. Click to use the ${dev ? "release" : "development"} builds (no upgrade yet).`;
+    h += `<button class="btn" data-act="channel" data-topic="${esc(d.topic)}" data-to="${dev ? "release" : "development"}" ${dis}
+      title="${esc(tip)}">${dev ? "Dev" : "Release"}</button>`;
+  }
+  if (!busy && d.up_to_date && plan.kind === "final") {
+    const target = dev ? data.latest_dev : data.latest;
+    h += `<span class="up-note" title="Runs the latest ${dev ? "development build" : "release"} (${esc(target ?? "?")})">Up to date</span>`;
+  } else if (!busy) {
+    const dis = d.online !== true ? "disabled" : "";
+    const warn = d.outdated || plan.kind === "step";
+    const tip = plan.kind === "step" ? plan.title : d.outdated ? "A newer release is available" : "Upgrade from OtaUrl";
+    h += `<button class="btn ${warn ? "warn" : ""}" data-act="upgrade" data-topic="${esc(d.topic)}" ${dis}
+      title="${esc(tip)}">${esc(plan.button || "Upgrade…")}</button>`;
   }
   if (d.upgrade) {
     const u = d.upgrade;
@@ -407,7 +421,7 @@ const sortValue = (d, c) => {
 function visibleDevices() {
   const q = ui.search.trim().toLowerCase();
   const list = data.devices.filter(d =>
-    (ui.showOffline || d.online !== false) &&
+    (ui.showOffline || d.online !== false || d.upgrading) &&
     (!q || [d.name, d.topic, d.ip, d.hostname, d.module].some(x => x && x.toLowerCase().includes(q))));
   const { col, desc } = ui.sort;
   list.sort((a, b) => {
@@ -440,8 +454,10 @@ function render() {
   $("connText").textContent = data.connected ? `Connected to ${data.broker}` : `Disconnected: ${data.status}`;
   const online = data.devices.filter(d => d.online === true).length;
   const offline = data.devices.filter(d => d.online === false).length;
-  $("counts").textContent = `${data.devices.length} devices · ${online} online · ${offline} offline · v${data.app_version}`;
-  $("mver").textContent = `v${data.app_version}`;
+  const upd = data.app_update
+    ? ` <a class="app-update" href="${esc(data.app_releases)}" target="_blank" rel="noopener" title="A newer Tasmota Derust is published">v${esc(data.app_update)} available</a>` : "";
+  $("counts").innerHTML = `${data.devices.length} devices · ${online} online · ${offline} offline · v${esc(data.app_version)}${upd}`;
+  $("mver").innerHTML = `v${esc(data.app_version)}${upd}`;
   $("banner").innerHTML = data.read_only
     ? `<div class="banner">Read-only mode: you can look, but relays, Wi-Fi switching and upgrades are disabled. ${esc(data.read_only_hint || "")}</div>` : "";
 
@@ -451,6 +467,7 @@ function render() {
     info = data.ssids.map((s, i) => `<span><span class="chip gray">${i + 1}</span> ${esc(s ?? "?")}</span>`).join("");
   else if (ui.view === "firmware")
     info = data.latest ? `<a href="https://github.com/arendst/Tasmota/releases/latest" target="_blank" rel="noopener">Latest release: ${esc(data.latest)}</a>`
+           + (data.latest_dev ? ` · <a href="https://github.com/arendst/Tasmota/commits/development" target="_blank" rel="noopener">Latest development: ${esc(data.latest_dev)}</a>` : "")
          : data.latest_error ? `<span style="color:var(--red)" title="${esc(data.latest_error)}">Latest release unknown</span>` : "Checking latest release…";
   $("viewInfo").innerHTML = info;
 
@@ -488,7 +505,7 @@ function renderTable(list) {
   for (const c of cols) h += `<th data-sort="${c}" ${arrow(c)}>${COLS[c].t}</th>`;
   h += `</tr></thead><tbody>`;
   for (const d of list) {
-    h += `<tr class="${d.online === false ? "offline" : ""}"><td><span class="devname">${bars(d)}${nameHtml(d)}</span></td>`;
+    h += `<tr class="${d.online === false ? "offline" : ""}" ${d.upgrading && d.online === false ? 'title="Upgrading: restarting…"' : ""}><td><span class="devname">${bars(d)}${nameHtml(d)}</span></td>`;
     for (const c of cols) h += `<td class="${COLS[c].num && !["rssi", "ap"].includes(c) ? "num" : ""}">${cellHtml(d, c)}</td>`;
     h += `</tr>`;
   }
@@ -506,7 +523,7 @@ const ICONS = {
 const svg = p => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
 const rssiChip = d => d.rssi == null || d.online === false ? "" : `<span class="rssi" style="background:${rssiColor(d.rssi)}">${d.rssi}</span>`;
 
-const offLabel = d => d.no_answer ? "No answer" : "Offline";
+const offLabel = d => d.upgrading ? "Upgrading, restarting…" : d.no_answer ? "No answer" : "Offline";
 
 // What a phone row shows for each view: one muted line under the name, and a short value on the right.
 function rowParts(d) {
@@ -633,7 +650,6 @@ async function post(url) {
 }
 
 const byTopic = t => data.devices.find(d => d.topic === t);
-const versionTuple = v => (v || "").split("(")[0].split(".").map(n => parseInt(n, 10) || 0);
 
 function readOnlyNotice() {
   toast(`Read-only mode is on: nothing was sent. ${data.read_only_hint || ""}`.trim());
@@ -657,20 +673,30 @@ async function onAction(btn) {
     return;
   }
 
+  if (btn.dataset.act === "channel") {
+    post(`${base}/channel/${btn.dataset.to}`);
+    return;
+  }
+
   if (btn.dataset.act === "upgrade") {
-    const v = versionTuple(d.version);
-    const old = v[0] < 9 || (v[0] === 9 && v[1] < 1);
-    let body = `<dl>
+    const plan = d.upgrade_plan;
+    let body = `<p><b>${esc(plan.title)}</b></p><dl>
       <dt>Topic</dt><dd>${esc(d.topic)}</dd>
       <dt>Current firmware</dt><dd>${esc(d.version ?? "unknown")}</dd>
       <dt>Latest release</dt><dd>${esc(data.latest ?? "unknown")}</dd>
-      <dt>OtaUrl</dt><dd>${esc(d.ota_url ?? "unknown")}</dd></dl>
-      <p>The device downloads the firmware from its OtaUrl and restarts. Do not power it off during the upgrade.</p>`;
-    if (old) body += `<p class="warn-text">This firmware is old. Tasmota needs intermediate upgrade steps for old versions;
-      upgrading straight to the latest release can fail.
-      <a href="https://tasmota.github.io/docs/Upgrading/#upgrade-flow" target="_blank" rel="noopener">Tasmota upgrade path</a></p>`;
-    if (d.ota_url && !d.ota_url.includes("ota.tasmota.com")) body += `<p class="warn-text">This device uses a custom OtaUrl.</p>`;
-    const ok = await confirmDialog(`Upgrade ${d.name}?`, body, "Upgrade");
+      ${data.latest_dev ? `<dt>Latest development</dt><dd>${esc(data.latest_dev)}</dd>` : ""}
+      <dt>Firmware image</dt><dd>${esc(plan.url ?? d.ota_url ?? "unknown")}</dd></dl>`;
+    for (const l of plan.details) body += `<p>${esc(l)}</p>`;
+    body += `<p>The device downloads the firmware and restarts. Do not power it off during the upgrade.</p>`;
+    for (const w of plan.warnings) body += `<p class="warn-text">${esc(w)}</p>`;
+    if (plan.kind === "step" || plan.kind === "manual")
+      body += `<p><a href="https://tasmota.github.io/docs/Upgrading/#upgrade-flow" target="_blank" rel="noopener">Tasmota upgrade path</a></p>`;
+    if (!plan.sets_ota_url && d.ota_url && !d.ota_url.includes("ota.tasmota.com")) body += `<p class="warn-text">This device uses a custom OtaUrl.</p>`;
+    if (!plan.can_start) {
+      await confirmDialog(`Upgrade ${d.name}`, body + `<p class="warn-text">This upgrade can't start now.</p>`, "Close");
+      return;
+    }
+    const ok = await confirmDialog(`Upgrade ${d.name}?`, body, plan.kind === "step" ? "Start this step" : "Upgrade");
     if (ok) post(`${base}/upgrade`);
   }
 }

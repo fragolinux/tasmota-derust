@@ -51,17 +51,12 @@ fun Device.matches(query: String): Boolean {
 
 val Device.isOffline get() = online == false
 /** "Offline" (LWT) or "No answer" (did not answer the status query). */
-val Device.offlineLabel get() = if (noAnswer) "No answer" else "Offline"
+val Device.offlineLabel get() = when {
+    upgrading -> "Upgrading, restarting…"
+    noAnswer -> "No answer"
+    else -> "Offline"
+}
 val Device.upgradeBusy get() = upgradeState in setOf("sent", "progress", "restarting")
-
-/** Tasmota needs intermediate steps to upgrade from versions older than 9.1. */
-val Device.needsUpgradePath: Boolean
-    get() {
-        val v = version?.substringBefore('(')?.split('.')?.map { it.toIntOrNull() ?: 0 } ?: return false
-        val major = v.getOrElse(0) { 0 }
-        val minor = v.getOrElse(1) { 0 }
-        return major < 9 || (major == 9 && minor < 1)
-    }
 
 // ------------------------------------------------------------------ formatting
 

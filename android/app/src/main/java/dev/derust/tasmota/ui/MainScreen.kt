@@ -67,6 +67,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun App(vm: MainViewModel) {
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val snap by vm.snapshot.collectAsStateWithLifecycle()
     var showSettings by rememberSaveable { mutableStateOf(false) }
     if (showSettings || settings.host.isBlank()) {
         SettingsScreen(
@@ -74,6 +75,8 @@ fun App(vm: MainViewModel) {
             canClose = settings.host.isNotBlank(),
             onSave = { vm.saveSettings(it); showSettings = false },
             onClose = { showSettings = false },
+            appUpdate = snap?.appUpdate,
+            appReleases = snap?.appReleases ?: "",
         )
     } else {
         MainScreen(vm, onSettings = { showSettings = true })
@@ -132,7 +135,7 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             Toolbar(vm, offlineCount = snap?.devices?.count { it.isOffline } ?: 0)
             val s = snap
             val list = s?.devices.orEmpty()
-                .filter { (vm.showOffline || !it.isOffline) && it.matches(vm.search) }
+                .filter { (vm.showOffline || !it.isOffline || it.upgrading) && it.matches(vm.search) }
                 .sortedFor(vm.sort)
             PullToRefreshBox(
                 isRefreshing = refreshing,
@@ -171,6 +174,7 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             onToggle = { n -> vm.togglePower(open.topic, n) },
             onSwitchAp = { n -> vm.switchAp(open.topic, n) },
             onUpgrade = { vm.upgrade(open.topic) },
+            onSetChannel = { dev -> vm.setChannel(open.topic, dev) },
             readOnly = vm.readOnly,
             onReadOnly = vm::readOnlyHit,
         )

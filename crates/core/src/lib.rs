@@ -6,6 +6,7 @@ pub mod config;
 pub mod device;
 pub mod github;
 pub mod mqtt;
+pub mod ota;
 pub mod session;
 
 use std::sync::Arc;

@@ -54,10 +54,12 @@ signing request is approved by hand.
 This program will not transfer any information to other networked systems unless
 specifically requested by the user or the person installing or operating it. It only
 connects to the MQTT broker you configure (and to your devices' own web pages when you open
-them), and asks GitHub's public API for the number of the latest Tasmota release, to mark
-outdated firmware. Nothing about you or your devices is sent anywhere else.
+them), asks GitHub for the version numbers of the latest Tasmota release and development
+build (to mark outdated firmware) and of the latest Tasmota Derust release (to say when a
+newer one is out), and asks ota.tasmota.com for the size of a firmware image before an
+upgrade step. Nothing about you or your devices is sent anywhere.
 
-## Features (v0.1)
+## Features
 
 - Connects to your MQTT broker and discovers Tasmota devices automatically
   (native `tasmota/discovery` messages, plus LWT-based discovery for older firmware).
@@ -69,8 +71,20 @@ outdated firmware. Nothing about you or your devices is sent anywhere else.
 - Telemetry column with the main live value (power in W, temperature, humidity).
 - Wifi view: legend of the two configured SSIDs; click the AP cell to switch a device
   to the other SSID (asks for confirmation, sends `Ap <n>`, device restarts).
-- Firmware view: compares each device with the latest official Tasmota release and lets you
-  upgrade **one device at a time** (confirmation, `Upgrade 1`, progress tracking).
+- Firmware view: compares each device with the latest official Tasmota release (or the
+  latest development build, when its OtaUrl points there) and upgrades **one device at a
+  time**, with a confirmation and progress tracking. Devices already up to date show
+  "Up to date" instead of the button; a device being upgraded stays in the list while it
+  restarts.
+- **Upgrade path for old firmware** (ESP8266): from 4.2.0 up, the official steps
+  5.14.0 → 6.7.1 → 7.2.0 → 8.5.1 → 9.1 → latest, one confirmed step at a time. Before each
+  step the free flash is checked against the image size (Tasmota goes through its
+  `-minimal` image by itself when needed), `.gz` images are used only from 8.2 on, and the
+  version is verified after the restart. If a step fails, upgrading again continues from
+  wherever the device is.
+- **Release / development switch**: one click points a device's OtaUrl at the official
+  release builds or at the development builds (same image, ESP8266 and ESP32); the upgrade
+  button then shows whether there is something to install.
 - Message log panel for troubleshooting.
 - **Read-only mode**, on at every start: only read queries (`Status 0`, `Module`, `SSId1/2`)
   are sent, and relays, Wi-Fi switching and upgrades are refused. Trying one says that
@@ -158,7 +172,12 @@ simulator, the Trivy security checks and the release process are in
 
 ## Status
 
-Early prototype.
+The basic functions are all there: discovery, the device views, relays, Wi-Fi AP switching,
+firmware upgrades from the device's OtaUrl, read-only mode, desktop, web and Android.
+
+Missing, compared with tdmgr: the advanced editors in its top tabs (rules, timers, switches,
+buttons, power settings and the like) and a per-device console. See the roadmap in
+[DESIGN.md](DESIGN.md#roadmap).
 
 ## License
 

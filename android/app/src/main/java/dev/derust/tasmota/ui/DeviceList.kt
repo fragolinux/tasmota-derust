@@ -66,7 +66,7 @@ fun DeviceList(
 /** A line above the list: the two Wi-Fi networks, or the latest Tasmota release. */
 private fun viewInfo(s: Snapshot, view: View): String? = when (view) {
     View.Wifi -> listOfNotNull(s.ssid1?.let { "1: $it" }, s.ssid2?.let { "2: $it" }).joinToString("   ").ifEmpty { null }
-    View.Firmware -> s.latest?.let { "Latest release: $it" }
+    View.Firmware -> s.latest?.let { "Latest release: $it" + (s.latestDev?.let { d -> " · development: $d" } ?: "") }
         ?: if (s.latestError != null) "Latest release unknown" else "Checking latest release…"
     else -> null
 }

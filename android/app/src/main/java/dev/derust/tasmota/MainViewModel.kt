@@ -130,6 +130,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun upgrade(topic: String) = command("Upgrade started") { it.upgrade(topic) }
 
+    fun setChannel(topic: String, development: Boolean) =
+        command(if (development) "OtaUrl: development builds" else "OtaUrl: releases") { it.setChannel(topic, development) }
+
     /** Tells the user that read-only is on (used before asking for a confirmation, too). */
     fun readOnlyHit() {
         _readOnlyHits.tryEmit(Unit)

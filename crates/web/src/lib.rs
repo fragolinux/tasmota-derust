@@ -50,6 +50,7 @@ pub fn router(session: Arc<Session>, read_only_hint: &str) -> Router {
         .route("/api/devices/{topic}/power/{n}", post(api_power))
         .route("/api/devices/{topic}/ap/{n}", post(api_ap))
         .route("/api/devices/{topic}/upgrade", post(api_upgrade))
+        .route("/api/devices/{topic}/channel/{channel}", post(api_channel))
         .with_state(AppState {
             session,
             read_only_hint: read_only_hint.into(),
@@ -185,7 +186,13 @@ fn reply(st: &AppState, r: Result<(), CommandError>) -> Response {
             return (StatusCode::FORBIDDEN, msg).into_response();
         }
         Err(CommandError::UnknownDevice) => StatusCode::NOT_FOUND,
-        Err(CommandError::Offline | CommandError::UpgradeRunning) => StatusCode::CONFLICT,
+        Err(
+            CommandError::Offline
+            | CommandError::UpgradeRunning
+            | CommandError::OtherUpgradeRunning
+            | CommandError::UpgradeNotPossible
+            | CommandError::NotOfficialOtaUrl,
+        ) => StatusCode::CONFLICT,
         Err(CommandError::NoSuchRelay | CommandError::BadAp) => StatusCode::BAD_REQUEST,
     };
     (code, r.unwrap_err().message()).into_response()
@@ -200,6 +207,22 @@ async fn api_power(
 
 async fn api_ap(State(st): State<AppState>, Path((topic, n)): Path<(String, u8)>) -> Response {
     reply(&st, st.session.switch_ap(&topic, n))
+}
+
+/// channel: "release" or "development". Changes the OtaUrl only.
+async fn api_channel(
+    State(st): State<AppState>,
+    Path((topic, channel)): Path<(String, String)>,
+) -> Response {
+    match channel.as_str() {
+        "release" => reply(&st, st.session.set_channel(&topic, false)),
+        "development" => reply(&st, st.session.set_channel(&topic, true)),
+        _ => (
+            StatusCode::BAD_REQUEST,
+            "channel must be release or development",
+        )
+            .into_response(),
+    }
 }
 
 async fn api_upgrade(State(st): State<AppState>, Path(topic): Path<String>) -> Response {

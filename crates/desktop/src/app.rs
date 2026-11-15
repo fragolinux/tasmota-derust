@@ -11,9 +11,10 @@ use egui_extras::{Column as TCol, TableBuilder};
 
 use tasmota_derust_core::columns::{Col, View};
 use tasmota_derust_core::config::{BrokerConfig, Config};
-use tasmota_derust_core::device::{self, Action, Device, Store, UpgradePhase};
+use tasmota_derust_core::device::{self, Action, Device, StartError, Store, UpgradePhase};
 use tasmota_derust_core::github::{self, Latest};
 use tasmota_derust_core::mqtt::{Mqtt, MqttEvent};
+use tasmota_derust_core::ota;
 use tasmota_derust_web::WebServer;
 
 #[cfg(feature = "screenshots")]
@@ -48,6 +49,8 @@ enum UiAction {
     OpenWeb(String),
     AskUpgrade(String),
     AskAp(String, i64),
+    /// Point the OtaUrl at the development (true) or release (false) builds.
+    SetChannel(String, bool),
     Sort(Option<Col>),
 }
 
@@ -60,9 +63,9 @@ struct LogLine {
 
 /// Read-only data the cell renderers need besides the device.
 struct CellCtx<'a> {
-    latest: Option<Vec<u32>>,
-    latest_str: Option<&'a str>,
+    targets: &'a ota::Targets,
     ssids: &'a [Option<String>; 2],
+    sizes: &'a ota::Sizes,
     dim: bool,
 }
 
@@ -73,6 +76,8 @@ pub struct DerustApp {
     rx: Option<Receiver<MqttEvent>>,
     conn: Conn,
     latest: Arc<Mutex<Latest>>,
+    latest_dev: Arc<Mutex<Latest>>,
+    app_latest: Arc<Mutex<Latest>>,
     settings_open: bool,
     draft: BrokerConfig,
     confirm: Option<Confirm>,
@@ -105,6 +110,8 @@ impl DerustApp {
             rx: None,
             conn: Conn::NotConfigured,
             latest: github::fetch_latest(repaint(&ctx)),
+            latest_dev: github::fetch_latest_dev(repaint(&ctx)),
+            app_latest: github::fetch_app_latest(repaint(&ctx)),
             settings_open: false,
             confirm: None,
             sort: None,
@@ -318,6 +325,18 @@ impl DerustApp {
         }
     }
 
+    /// Latest release and latest development build.
+    fn targets(&self) -> ota::Targets {
+        let dev = match &*self.latest_dev.lock().unwrap() {
+            Latest::Ok(v) => Some(v.clone()),
+            _ => None,
+        };
+        ota::Targets {
+            release: self.latest_version(),
+            development: dev,
+        }
+    }
+
     fn latest_version(&self) -> Option<String> {
         match &*self.latest.lock().unwrap() {
             Latest::Ok(v) => Some(v.clone()),
@@ -367,6 +386,8 @@ impl DerustApp {
                 ui.separator();
                 self.web_controls(ui);
                 ui.separator();
+                // Copied first: targets() takes the same lock.
+                let latest = self.latest.lock().unwrap().clone();
                 match self.cfg.view {
                     View::Wifi => {
                         // Right-to-left: add in reverse order.
@@ -376,10 +397,18 @@ impl DerustApp {
                             ui.add_space(8.0);
                         }
                     }
-                    View::Firmware => match &*self.latest.lock().unwrap() {
+                    View::Firmware => match latest {
                         Latest::Ok(v) => {
+                            // Right-to-left: the development build goes first.
+                            if let Some(dev) = self.targets().development {
+                                ui.hyperlink_to(
+                                    format!("dev {dev}"),
+                                    "https://github.com/arendst/Tasmota/commits/development",
+                                );
+                                ui.label("·");
+                            }
                             ui.hyperlink_to(
-                                format!("Latest release: {v}"),
+                                format!("Latest {v}"),
                                 "https://github.com/arendst/Tasmota/releases/latest",
                             );
                         }
@@ -489,6 +518,14 @@ impl DerustApp {
                 );
                 ui.label(RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).weak())
                     .on_hover_text(concat!("Tasmota Derust ", env!("CARGO_PKG_VERSION")));
+                let update = github::app_update(&self.app_latest.lock().unwrap());
+                if let Some(v) = update {
+                    ui.hyperlink_to(
+                        RichText::new(format!("v{v} available")).color(ORANGE),
+                        github::APP_RELEASES,
+                    )
+                    .on_hover_text("A newer Tasmota Derust is published: open its release page");
+                }
             });
         });
     }
@@ -538,11 +575,11 @@ impl DerustApp {
     fn table(&self, ui: &mut egui::Ui, actions: &mut Vec<UiAction>) {
         let view = self.cfg.view;
         let cols = self.cfg.visible_columns(view);
-        let latest_str = self.latest_version();
+        let targets = self.targets();
         let info = CellCtx {
-            latest: latest_str.as_deref().and_then(device::parse_version),
-            latest_str: latest_str.as_deref(),
+            targets: &targets,
             ssids: &self.store.ssids,
+            sizes: &self.store.sizes,
             dim: false,
         };
 
@@ -550,7 +587,7 @@ impl DerustApp {
             .store
             .devices
             .values()
-            .filter(|d| self.cfg.show_offline || !d.is_offline())
+            .filter(|d| self.cfg.show_offline || !d.is_offline() || is_upgrading(d))
             .collect();
         let sort = self.sort;
         rows.sort_by(|a, b| {
@@ -613,7 +650,10 @@ impl DerustApp {
     fn handle_actions(&mut self, actions: Vec<UiAction>) {
         for a in actions {
             match a {
-                UiAction::Toggle(..) | UiAction::AskUpgrade(_) | UiAction::AskAp(..)
+                UiAction::Toggle(..)
+                | UiAction::AskUpgrade(_)
+                | UiAction::AskAp(..)
+                | UiAction::SetChannel(..)
                     if self.read_only =>
                 {
                     self.show_notice(READ_ONLY_NOTICE);
@@ -623,6 +663,17 @@ impl DerustApp {
                         .store
                         .command(&key, &format!("POWER{}", i + 1), "TOGGLE")
                     {
+                        self.apply(vec![x]);
+                    }
+                }
+                UiAction::SetChannel(key, dev) => {
+                    let url = self
+                        .store
+                        .devices
+                        .get(&key)
+                        .and_then(|d| d.ota_url.as_deref())
+                        .and_then(|u| ota::channel_url(u, dev));
+                    if let Some(x) = url.and_then(|u| self.store.command(&key, "OTAURL", &u)) {
                         self.apply(vec![x]);
                     }
                 }
@@ -709,13 +760,17 @@ impl DerustApp {
             return;
         };
         let latest = self.latest_version();
+        let targets = self.targets();
         let mut result: Option<bool> = None;
+        let mut ok_enabled = true;
 
         let resp = egui::Modal::new(egui::Id::unique("confirm")).show(ctx, |ui| {
             ui.set_max_width(520.0);
             let ok_label = match confirm {
                 Confirm::Upgrade(_) => {
+                    let plan = ota::plan_info(d, &targets, &self.store.sizes);
                     ui.heading(format!("Upgrade {}?", d.display_name()));
+                    ui.label(RichText::new(arrows(&plan.title)).strong());
                     ui.add_space(6.0);
                     egui::Grid::new("upg").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
                         ui.label("Topic");
@@ -727,37 +782,39 @@ impl DerustApp {
                         ui.label("Latest release");
                         ui.label(latest.as_deref().unwrap_or("unknown"));
                         ui.end_row();
-                        ui.label("OtaUrl");
-                        ui.label(d.ota_url.as_deref().unwrap_or("unknown"));
+                        if let Some(dev) = &targets.development {
+                            ui.label("Latest development");
+                            ui.label(dev.as_str());
+                            ui.end_row();
+                        }
+                        ui.label("Firmware image");
+                        ui.label(plan.url.as_deref().or(d.ota_url.as_deref()).unwrap_or("unknown"));
                         ui.end_row();
                     });
                     ui.add_space(6.0);
+                    for line in &plan.details {
+                        ui.label(arrows(line));
+                    }
                     ui.label(
-                        "The device downloads the firmware from its OtaUrl and restarts. \
-                         Do not power it off during the upgrade.",
+                        "The device downloads the firmware and restarts. Do not power it off during \
+                         the upgrade.",
                     );
-                    let old = d
-                        .version
-                        .as_deref()
-                        .and_then(device::parse_version)
-                        .is_some_and(|v| v < vec![9, 1]);
-                    if old {
-                        ui.add_space(6.0);
-                        ui.colored_label(
-                            ORANGE,
-                            "This firmware is old. Tasmota needs intermediate upgrade steps for old \
-                             versions; upgrading straight to the latest release can fail.",
-                        );
+                    for w in &plan.warnings {
+                        ui.add_space(4.0);
+                        ui.colored_label(ORANGE, arrows(w));
+                    }
+                    if plan.kind == "step" || plan.kind == "manual" {
                         ui.hyperlink_to(
                             "Tasmota upgrade path",
                             "https://tasmota.github.io/docs/Upgrading/#upgrade-flow",
                         );
                     }
-                    if d.ota_url.as_deref().is_some_and(|u| !u.contains("ota.tasmota.com")) {
+                    if !plan.sets_ota_url && d.ota_url.as_deref().is_some_and(|u| !u.contains("ota.tasmota.com")) {
                         ui.add_space(6.0);
                         ui.colored_label(ORANGE, "This device uses a custom OtaUrl.");
                     }
-                    "Upgrade"
+                    ok_enabled = plan.can_start;
+                    if plan.kind == "step" { "Start this step" } else { "Upgrade" }
                 }
                 Confirm::SwitchAp(_, to) => {
                     let name = |n: i64| {
@@ -778,7 +835,7 @@ impl DerustApp {
             };
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.button(RichText::new(ok_label).strong()).clicked() {
+                if ui.add_enabled(ok_enabled, egui::Button::new(RichText::new(ok_label).strong())).clicked() {
                     result = Some(true);
                 }
                 if ui.button("Cancel").clicked() {
@@ -797,14 +854,31 @@ impl DerustApp {
                 self.show_notice(READ_ONLY_NOTICE);
             }
             Some(true) => {
-                let action = match self.confirm.take() {
-                    Some(Confirm::Upgrade(k)) => self.store.start_upgrade(&k),
-                    Some(Confirm::SwitchAp(k, n)) => self.store.command(&k, "AP", &n.to_string()),
-                    None => None,
+                let actions = match self.confirm.take() {
+                    Some(Confirm::Upgrade(k)) => match self.store.start_upgrade(&k, &targets) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            self.show_notice(&match e {
+                                StartError::OtherRunning(name) => {
+                                    format!("{name} is being upgraded: one device at a time.")
+                                }
+                                StartError::NotPossible(why) => why,
+                                StartError::Running => "This device is already upgrading.".into(),
+                                StartError::Offline | StartError::Unknown => {
+                                    "The device is not online.".into()
+                                }
+                            });
+                            Vec::new()
+                        }
+                    },
+                    Some(Confirm::SwitchAp(k, n)) => self
+                        .store
+                        .command(&k, "AP", &n.to_string())
+                        .into_iter()
+                        .collect(),
+                    None => Vec::new(),
                 };
-                if let Some(a) = action {
-                    self.apply(vec![a]);
-                }
+                self.apply(actions);
             }
             Some(false) => self.confirm = None,
             None => {}
@@ -845,9 +919,9 @@ impl eframe::App for DerustApp {
 
 fn info_ref<'a>(i: &CellCtx<'a>) -> CellCtx<'a> {
     CellCtx {
-        latest: i.latest.clone(),
-        latest_str: i.latest_str,
+        targets: i.targets,
         ssids: i.ssids,
+        sizes: i.sizes,
         dim: i.dim,
     }
 }
@@ -1005,11 +1079,13 @@ fn device_cell(ui: &mut egui::Ui, d: &Device, actions: &mut Vec<UiAction>) {
     }
 }
 
-fn is_outdated(d: &Device, latest: &Option<Vec<u32>>) -> bool {
-    match (d.version.as_deref().and_then(device::parse_version), latest) {
-        (Some(v), Some(l)) => v < *l,
-        _ => false,
-    }
+fn is_upgrading(d: &Device) -> bool {
+    d.upgrade.as_ref().is_some_and(|u| u.is_active())
+}
+
+/// The bundled fonts have no "→": draw it as "->".
+fn arrows(s: &str) -> String {
+    s.replace('→', "->")
 }
 
 fn opt<T: ToString>(v: &Option<T>) -> String {
@@ -1243,12 +1319,18 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
         }
         Col::Version => {
             let text = cell_text(d, col);
-            if is_outdated(d, &ci.latest) && !ci.dim {
+            let st = ota::version_status(d.version.as_deref(), d.ota_url.as_deref(), ci.targets);
+            if st.outdated && !ci.dim {
+                let which = if st.channel_dev {
+                    "development build"
+                } else {
+                    "release"
+                };
                 ui.label(RichText::new(text).color(ORANGE).strong())
                     .on_hover_text(format!(
-                        "{} — latest release is {}",
+                        "{} — latest {which} is {}",
                         d.version.as_deref().unwrap_or(""),
-                        ci.latest_str.unwrap_or("?")
+                        st.target.as_deref().unwrap_or("?")
                     ));
             } else {
                 text_label(ui, text, false, ci.dim)
@@ -1256,16 +1338,53 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
             }
         }
         Col::Update => {
-            let outdated = is_outdated(d, &ci.latest);
-            let busy = d.upgrade.as_ref().is_some_and(|u| u.is_active());
+            let st = ota::version_status(d.version.as_deref(), d.ota_url.as_deref(), ci.targets);
+            let outdated = st.outdated;
+            let busy = is_upgrading(d);
+            let plan = ota::plan_info(d, ci.targets, ci.sizes);
+            // Release ↔ development: changes the OtaUrl only; the upgrade button then shows
+            // whether there is something to install.
             if !busy {
-                let btn = if outdated {
-                    egui::Button::new(RichText::new("Upgrade…").color(Color32::BLACK)).fill(ORANGE)
+                let dev = ota::channel(d.ota_url.as_deref()) == ota::Channel::Development;
+                if let Some(url) = d.ota_url.as_deref().and_then(|u| ota::channel_url(u, !dev)) {
+                    let label = if dev { "Dev" } else { "Release" };
+                    let hint = format!(
+                        "OtaUrl points to the {} builds. Click to use the {} builds:\n{url}",
+                        if dev { "development" } else { "release" },
+                        if dev { "release" } else { "development" },
+                    );
+                    if ui
+                        .add_enabled(online, egui::Button::new(label).small())
+                        .on_hover_text(hint)
+                        .clicked()
+                    {
+                        actions.push(UiAction::SetChannel(d.topic.clone(), !dev));
+                    }
+                }
+            }
+            if !busy && st.up_to_date && plan.kind == "final" {
+                let which = if st.channel_dev {
+                    "development build"
                 } else {
-                    egui::Button::new("Upgrade…")
+                    "release"
                 };
-                let hint = if outdated {
-                    "A newer release is available"
+                ui.label(RichText::new("Up to date").weak())
+                    .on_hover_text(format!(
+                        "Runs the latest {which} ({})",
+                        st.target.as_deref().unwrap_or("?")
+                    ));
+            } else if !busy {
+                let label = plan.button.as_str();
+                let btn = if outdated || plan.kind == "step" {
+                    egui::Button::new(RichText::new(label).color(Color32::BLACK)).fill(ORANGE)
+                } else {
+                    egui::Button::new(label)
+                };
+                let title = arrows(&plan.title);
+                let hint = if plan.kind == "step" || st.downgrade {
+                    title.as_str()
+                } else if outdated {
+                    "A newer version is available"
                 } else {
                     "Upgrade from OtaUrl"
                 };
@@ -1281,17 +1400,17 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
                     }
                     UpgradePhase::Progress(m) => {
                         ui.spinner();
-                        ui.label(m.as_str()).on_hover_text(m.as_str());
+                        ui.label(arrows(m)).on_hover_text(arrows(m));
                     }
                     UpgradePhase::Restarting => {
                         ui.spinner();
                         ui.label("Restarting…");
                     }
                     UpgradePhase::Done(m) => {
-                        ui.colored_label(GREEN, m.as_str());
+                        ui.colored_label(GREEN, arrows(m));
                     }
                     UpgradePhase::Failed(m) => {
-                        ui.colored_label(RED, m.as_str()).on_hover_text(m.as_str());
+                        ui.colored_label(RED, arrows(m)).on_hover_text(arrows(m));
                     }
                     UpgradePhase::Note(m) => {
                         ui.label(RichText::new(m.as_str()).weak())

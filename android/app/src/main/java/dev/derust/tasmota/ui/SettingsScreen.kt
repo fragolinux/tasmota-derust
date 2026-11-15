@@ -29,6 +29,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -42,6 +43,8 @@ fun SettingsScreen(
     canClose: Boolean,
     onSave: (BrokerSettings) -> Unit,
     onClose: () -> Unit,
+    appUpdate: String? = null,
+    appReleases: String = "",
 ) {
     var host by rememberSaveable { mutableStateOf(current.host) }
     var port by rememberSaveable { mutableStateOf(current.port.toString()) }
@@ -115,6 +118,10 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (appUpdate != null) {
+                val uri = LocalUriHandler.current
+                TextButton(onClick = { uri.openUri(appReleases) }) { Text("Version $appUpdate is available") }
+            }
         }
     }
 }

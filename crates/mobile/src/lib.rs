@@ -29,6 +29,9 @@ pub enum CommandError {
     NoSuchRelay,
     BadAp,
     UpgradeRunning,
+    OtherUpgradeRunning,
+    UpgradeNotPossible,
+    NotOfficialOtaUrl,
 }
 
 impl CommandError {
@@ -41,6 +44,9 @@ impl CommandError {
             CommandError::NoSuchRelay => E::NoSuchRelay,
             CommandError::BadAp => E::BadAp,
             CommandError::UpgradeRunning => E::UpgradeRunning,
+            CommandError::OtherUpgradeRunning => E::OtherUpgradeRunning,
+            CommandError::UpgradeNotPossible => E::UpgradeNotPossible,
+            CommandError::NotOfficialOtaUrl => E::NotOfficialOtaUrl,
         }
     }
 }
@@ -63,6 +69,9 @@ impl From<session::CommandError> for CommandError {
             E::NoSuchRelay => CommandError::NoSuchRelay,
             E::BadAp => CommandError::BadAp,
             E::UpgradeRunning => CommandError::UpgradeRunning,
+            E::OtherUpgradeRunning => CommandError::OtherUpgradeRunning,
+            E::UpgradeNotPossible => CommandError::UpgradeNotPossible,
+            E::NotOfficialOtaUrl => CommandError::NotOfficialOtaUrl,
         }
     }
 }
@@ -118,15 +127,40 @@ pub struct Device {
     /// "sent", "progress", "restarting", "done" or "failed".
     pub upgrade_state: Option<String>,
     pub upgrade_text: Option<String>,
+    /// An upgrade is running: keep the device in view even while it restarts.
+    pub upgrading: bool,
+    /// Runs the latest release or newer: no upgrade button.
+    pub up_to_date: bool,
+    pub upgrade_plan: UpgradePlan,
+    /// "release", "development" or "custom": what the OtaUrl points at.
+    pub ota_channel: String,
+    pub can_switch_channel: bool,
+}
+
+/// What the upgrade button does now (see the core's `ota::PlanInfo`).
+#[derive(uniffi::Record)]
+pub struct UpgradePlan {
+    /// "final", "step", "manual" or "unknown".
+    pub kind: String,
+    pub title: String,
+    pub url: Option<String>,
+    pub details: Vec<String>,
+    pub warnings: Vec<String>,
+    pub can_start: bool,
+    pub button: String,
 }
 
 #[derive(uniffi::Record)]
 pub struct Snapshot {
+    /// A newer Tasmota Derust release, when there is one.
+    pub app_update: Option<String>,
+    pub app_releases: String,
     pub connected: bool,
     pub status: String,
     pub broker: String,
     pub read_only: bool,
     pub latest: Option<String>,
+    pub latest_dev: Option<String>,
     pub latest_error: Option<String>,
     pub ssid1: Option<String>,
     pub ssid2: Option<String>,
@@ -179,6 +213,19 @@ impl From<session::DeviceInfo> for Device {
             sensor_json: d.sensor.map(|v| format!("{v:#}")),
             upgrade_state: d.upgrade.as_ref().map(|u| u.state.to_string()),
             upgrade_text: d.upgrade.map(|u| u.text),
+            upgrading: d.upgrading,
+            ota_channel: d.ota_channel.to_string(),
+            can_switch_channel: d.can_switch_channel,
+            up_to_date: d.up_to_date,
+            upgrade_plan: UpgradePlan {
+                kind: d.upgrade_plan.kind.to_string(),
+                title: d.upgrade_plan.title,
+                url: d.upgrade_plan.url,
+                details: d.upgrade_plan.details,
+                warnings: d.upgrade_plan.warnings,
+                can_start: d.upgrade_plan.can_start,
+                button: d.upgrade_plan.button,
+            },
         }
     }
 }
@@ -217,7 +264,10 @@ impl Session {
             status: s.status,
             broker: s.broker,
             read_only: s.read_only,
+            app_update: s.app_update,
+            app_releases: s.app_releases.to_string(),
             latest: s.latest,
+            latest_dev: s.latest_dev,
             latest_error: s.latest_error,
             ssid1,
             ssid2,
@@ -242,5 +292,10 @@ impl Session {
 
     pub fn upgrade(&self, topic: String) -> Result<(), CommandError> {
         Ok(self.inner.upgrade(&topic)?)
+    }
+
+    /// Points the OtaUrl at the development (true) or release (false) builds.
+    pub fn set_channel(&self, topic: String, development: bool) -> Result<(), CommandError> {
+        Ok(self.inner.set_channel(&topic, development)?)
     }
 }

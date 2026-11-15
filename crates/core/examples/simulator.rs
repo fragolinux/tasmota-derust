@@ -7,6 +7,8 @@
 //! (POWER<n> TOGGLE, AP, UPGRADE), so every screen can be exercised. Special cases:
 //!   "ESP32 plug"     upgrades like a real ESP32: restarts into safeboot, then into 16.0.0
 //!   "Unplugged plug" its retained LWT says Online, but it never answers (stale LWT)
+//!   "Old switch"     ESP8266 on 6.7.1 with ~1 MB flash: follows OtaUrl, refuses .gz before
+//!                    8.2, goes through <name>-minimal when the image does not fit
 //!
 //! Safety: it refuses any broker that is not on this machine (127.0.0.1 / ::1 / localhost),
 //! so it can never publish fake states or answers on a real home broker.
@@ -41,6 +43,67 @@ struct Fake {
     safeboot: bool,
     /// Retained LWT "Online" although the device is gone.
     stale_lwt: bool,
+    ota_url: String,
+    /// Build tag in the version string, e.g. "sonoff", "lite", "release-tasmota".
+    build: String,
+    /// Size of the running image (ESP8266 flash model: about 1000 KB for code).
+    program_kb: i64,
+}
+
+const FLASH_KB: i64 = 1000;
+
+#[allow(clippy::type_complexity)]
+/// What a firmware image does on the simulated old switch: (version, build, program KB,
+/// download KB). Sizes are those of the official files.
+fn image(url: &str) -> Option<(&'static str, &'static str, i64, i64)> {
+    let table: &[(&str, (&str, &str, i64, i64))] = &[
+        (
+            "release-5.14.0/sonoff-classic.bin",
+            ("5.14.0", "classic", 489, 489),
+        ),
+        (
+            "release-5.14.0/sonoff-minimal.bin",
+            ("5.14.0", "minimal", 428, 428),
+        ),
+        ("release-6.7.1/sonoff.bin", ("6.7.1", "sonoff", 564, 564)),
+        (
+            "release-6.7.1/sonoff-minimal.bin",
+            ("6.7.1", "minimal", 368, 368),
+        ),
+        (
+            "release-7.2.0/tasmota-lite.bin",
+            ("7.2.0", "lite", 463, 464),
+        ),
+        (
+            "release-7.2.0/tasmota-minimal.bin",
+            ("7.2.0", "minimal", 373, 374),
+        ),
+        (
+            "release-8.5.1/tasmota-lite.bin",
+            ("8.5.1", "lite", 473, 474),
+        ),
+        (
+            "release-8.5.1/tasmota-lite.bin.gz",
+            ("8.5.1", "lite", 473, 338),
+        ),
+        (
+            "release-8.5.1/tasmota-minimal.bin",
+            ("8.5.1", "minimal", 351, 352),
+        ),
+        (
+            "release-9.1.0/tasmota-lite.bin.gz",
+            ("9.1.0", "lite", 473, 339),
+        ),
+        ("release/tasmota.bin.gz", ("16.0.0", "tasmota", 651, 459)),
+        (
+            "release/tasmota-minimal.bin.gz",
+            ("16.0.0", "minimal", 380, 258),
+        ),
+    ];
+    table
+        .iter()
+        .find(|(k, _)| url.ends_with(k))
+        .map(|(_, v)| *v)
 }
 
 const SSIDS: [&str; 2] = ["Home-Main", "Home-Extender"];
@@ -190,6 +253,19 @@ fn devices() -> Vec<Fake> {
             0,
             false,
         ),
+        (
+            "vecchio_interruttore",
+            "Old switch",
+            "Sonoff Basic",
+            1,
+            66,
+            1,
+            "6.7.1",
+            true,
+            "Power On",
+            86_400 * 900,
+            false,
+        ),
     ];
     list.iter()
         .enumerate()
@@ -215,6 +291,23 @@ fn devices() -> Vec<Fake> {
                     esp32: topic == "presa_esp32" || topic == "staccata",
                     safeboot: false,
                     stale_lwt: topic == "staccata",
+                    ota_url: if topic == "vecchio_interruttore" {
+                        "http://thehackbox.org/tasmota/release/sonoff.bin".into()
+                    } else if topic == "presa_esp32" || topic == "staccata" {
+                        "http://ota.tasmota.com/tasmota32/release/tasmota32.bin".into()
+                    } else {
+                        "http://ota.tasmota.com/tasmota/release/tasmota.bin.gz".into()
+                    },
+                    build: if topic == "vecchio_interruttore" {
+                        "sonoff".into()
+                    } else {
+                        "release-tasmota".into()
+                    },
+                    program_kb: if topic == "vecchio_interruttore" {
+                        564
+                    } else {
+                        651
+                    },
                 }
             },
         )
@@ -274,7 +367,7 @@ impl Fake {
         json!({
             "Status": { "Module": 1, "DeviceName": self.name, "FriendlyName": [self.name], "Topic": self.topic },
             "StatusPRM": { "Baudrate": 115200, "GroupTopic": "tasmotas",
-                           "OtaUrl": if self.esp32 { "http://ota.tasmota.com/tasmota32/release/tasmota32.bin" } else { "http://ota.tasmota.com/tasmota/release/tasmota.bin.gz" },
+                           "OtaUrl": self.ota_url,
                            "RestartReason": self.restart_reason, "Uptime": Self::tasmota_duration(self.uptime()),
                            "BootCount": self.boot_count, "Sleep": 50 },
             "StatusFWR": { "Version": self.full_version(),
@@ -283,7 +376,7 @@ impl Fake {
                            "Hardware": if self.esp32 { "ESP32-D0WD-V3 v3.1" } else { "ESP8266EX" } },
             "StatusMEM": if self.safeboot { json!({ "ProgramSize": 772, "Free": 59, "Heap": 120 }) }
                          else if self.esp32 { json!({ "ProgramSize": 1889, "Free": 990, "Heap": 140 }) }
-                         else { json!({ "ProgramSize": 651, "Free": 352, "Heap": 25 }) },
+                         else { json!({ "ProgramSize": self.program_kb, "Free": FLASH_KB - self.program_kb, "Heap": 25 }) },
             "StatusNET": { "Hostname": format!("{}-1234", self.topic), "IPAddress": self.ip, "Gateway": "10.99.0.1", "Mac": self.mac },
             "StatusMQT": { "MqttHost": "127.0.0.1", "MqttClient": format!("DVES_{}", self.topic), "MqttCount": 1 },
             "StatusSTS": self.state(),
@@ -296,7 +389,7 @@ impl Fake {
         } else if self.esp32 {
             "tasmota32"
         } else {
-            "release-tasmota"
+            &self.build
         };
         format!("{}({build})", self.version)
     }
@@ -464,6 +557,72 @@ fn handle(client: &Client, fakes: &Arc<Mutex<Vec<Fake>>>, topic: &str, cmd: &str
         "AP" if payload == "1" || payload == "2" => {
             f.ap = payload.parse().unwrap();
             restart(client.clone(), fakes.clone(), topic.to_string(), None);
+        }
+        "OTAURL" if !payload.is_empty() => {
+            f.ota_url = payload.to_string();
+            send(stat("RESULT"), json!({ "OtaUrl": payload }).to_string());
+        }
+        "UPGRADE" if payload == "1" && f.topic == "vecchio_interruttore" => {
+            let Some((version, build, program, download)) = image(&f.ota_url) else {
+                send(
+                    stat("UPGRADE"),
+                    json!({ "Upgrade": "Failed: file not found" }).to_string(),
+                );
+                return;
+            };
+            let now: Vec<u32> = f
+                .version
+                .split('.')
+                .map(|x| x.parse().unwrap_or(0))
+                .collect();
+            if f.ota_url.ends_with(".gz") && now < vec![8, 2] {
+                // Old firmware can't unpack .gz images.
+                send(
+                    stat("UPGRADE"),
+                    json!({ "Upgrade": "Failed: unexpected file" }).to_string(),
+                );
+                return;
+            }
+            send(
+                stat("UPGRADE"),
+                json!({ "Upgrade": format!("Version {version} from {}", f.ota_url) }).to_string(),
+            );
+            let free = FLASH_KB - f.program_kb;
+            let minimal = if download > free {
+                // Tasmota's own rule: <name up to the last '-'>-minimal.<ext> in the same folder.
+                let (dir, file) = f.ota_url.rsplit_once('/').unwrap();
+                let ext = &file[file.find('.').unwrap()..];
+                let stem = &file[..file.len() - ext.len()];
+                let name = stem.rsplit_once('-').map(|(n, _)| n).unwrap_or(stem);
+                match image(&format!("{dir}/{name}-minimal{ext}")) {
+                    Some(m) if m.3 <= free => Some(m),
+                    _ => {
+                        send(
+                            stat("UPGRADE"),
+                            json!({ "Upgrade": "Failed: not enough space" }).to_string(),
+                        );
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+            let (c, fk, t) = (client.clone(), fakes.clone(), topic.to_string());
+            thread::spawn(move || {
+                if let Some((mv, mb, mp, _)) = minimal {
+                    restart_now(&c, &fk, &t, |f| {
+                        f.version = mv.into();
+                        f.build = mb.into();
+                        f.program_kb = mp;
+                    });
+                    thread::sleep(Duration::from_secs(6));
+                }
+                restart_now(&c, &fk, &t, |f| {
+                    f.version = version.into();
+                    f.build = build.into();
+                    f.program_kb = program;
+                });
+            });
         }
         "UPGRADE" if payload == "1" && f.esp32 => {
             send(stat("UPGRADE"), json!({ "Upgrade": "Version 16.0.0 from http://ota.tasmota.com/tasmota32/release/tasmota32.bin" }).to_string());

@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::Notify;
 use crate::config::BrokerConfig;
-use crate::device::{self, Action, Device, Store, UpgradePhase};
+use crate::device::{self, Action, Device, StartError, Store, UpgradePhase};
 use crate::github::{self, Latest};
 use crate::mqtt::{Mqtt, MqttEvent};
 
@@ -29,6 +29,8 @@ pub struct Session {
     shared: Arc<Mutex<Shared>>,
     mqtt: Arc<Mqtt>,
     latest: Arc<Mutex<Latest>>,
+    latest_dev: Arc<Mutex<Latest>>,
+    app_latest: Arc<Mutex<Latest>>,
     read_only: AtomicBool,
     broker: String,
 }
@@ -41,6 +43,9 @@ pub enum CommandError {
     NoSuchRelay,
     BadAp,
     UpgradeRunning,
+    OtherUpgradeRunning,
+    UpgradeNotPossible,
+    NotOfficialOtaUrl,
 }
 
 impl CommandError {
@@ -52,6 +57,13 @@ impl CommandError {
             CommandError::NoSuchRelay => "No such relay.",
             CommandError::BadAp => "AP must be 1 or 2.",
             CommandError::UpgradeRunning => "An upgrade is already running on this device.",
+            CommandError::OtherUpgradeRunning => "Another device is being upgraded: one at a time.",
+            CommandError::UpgradeNotPossible => {
+                "This upgrade can't start now: see the upgrade details."
+            }
+            CommandError::NotOfficialOtaUrl => {
+                "The OtaUrl is not an official release or development URL."
+            }
         }
     }
 }
@@ -128,7 +140,9 @@ impl Session {
         Session {
             shared,
             mqtt,
-            latest: github::fetch_latest(notify),
+            latest: github::fetch_latest(notify.clone()),
+            latest_dev: github::fetch_latest_dev(notify.clone()),
+            app_latest: github::fetch_app_latest(notify),
             read_only: AtomicBool::new(read_only),
             broker: format!("{}:{}", broker.host.trim(), broker.port),
         }
@@ -151,23 +165,35 @@ impl Session {
             Latest::Err(e) => (None, Some(e.clone())),
             Latest::Loading => (None, None),
         };
-        let latest_v = latest.as_deref().and_then(device::parse_version);
+        let targets = self.targets();
         let s = self.shared.lock().unwrap();
+        let devices = s
+            .store
+            .devices
+            .values()
+            .map(|d| {
+                let plan = crate::ota::plan_info(d, &targets, &s.store.sizes);
+                let status = crate::ota::version_status(
+                    d.version.as_deref(),
+                    d.ota_url.as_deref(),
+                    &targets,
+                );
+                DeviceInfo::new(d, status, plan)
+            })
+            .collect();
         Snapshot {
             app_version: env!("CARGO_PKG_VERSION"),
+            app_update: github::app_update(&self.app_latest.lock().unwrap()),
+            app_releases: github::APP_RELEASES,
             connected: s.connected,
             status: s.status.clone(),
             broker: self.broker.clone(),
             read_only: self.read_only(),
             latest,
+            latest_dev: targets.development.clone(),
             latest_error,
             ssids: s.store.ssids.clone(),
-            devices: s
-                .store
-                .devices
-                .values()
-                .map(|d| DeviceInfo::new(d, latest_v.as_ref()))
-                .collect(),
+            devices,
         }
     }
 
@@ -224,23 +250,58 @@ impl Session {
         Ok(())
     }
 
-    /// Starts an OTA upgrade of one device from its OtaUrl.
+    /// Starts the next upgrade of one device: one step of the upgrade path for old firmware,
+    /// or the upgrade to the latest release (see `ota`). One device at a time.
     pub fn upgrade(&self, topic: &str) -> Result<(), CommandError> {
-        let action = {
+        let targets = self.targets();
+        let actions = {
             let mut s = self.shared.lock().unwrap();
             self.guard(&s, topic)?;
-            if s.store
+            s.store
+                .start_upgrade(topic, &targets)
+                .map_err(|e| match e {
+                    StartError::Unknown => CommandError::UnknownDevice,
+                    StartError::Offline => CommandError::Offline,
+                    StartError::Running => CommandError::UpgradeRunning,
+                    StartError::OtherRunning(_) => CommandError::OtherUpgradeRunning,
+                    StartError::NotPossible(_) => CommandError::UpgradeNotPossible,
+                })?
+        };
+        run_actions(&self.mqtt, actions);
+        Ok(())
+    }
+
+    /// Points the device's OtaUrl at the release or the development builds (same image name).
+    /// Nothing is installed: the upgrade button does that.
+    pub fn set_channel(&self, topic: &str, development: bool) -> Result<(), CommandError> {
+        let action = {
+            let s = self.shared.lock().unwrap();
+            self.guard(&s, topic)?;
+            let d = s
+                .store
                 .devices
                 .get(topic)
-                .and_then(|d| d.upgrade.as_ref())
-                .is_some_and(|u| u.is_active())
-            {
-                return Err(CommandError::UpgradeRunning);
-            }
-            s.store.start_upgrade(topic)
+                .ok_or(CommandError::UnknownDevice)?;
+            let url = d
+                .ota_url
+                .as_deref()
+                .and_then(|u| crate::ota::channel_url(u, development))
+                .ok_or(CommandError::NotOfficialOtaUrl)?;
+            s.store.command(topic, "OTAURL", &url)
         };
         run_actions(&self.mqtt, action.into_iter().collect());
         Ok(())
+    }
+
+    fn targets(&self) -> crate::ota::Targets {
+        let get = |l: &Mutex<Latest>| match &*l.lock().unwrap() {
+            Latest::Ok(v) => Some(v.clone()),
+            _ => None,
+        };
+        crate::ota::Targets {
+            release: get(&self.latest),
+            development: get(&self.latest_dev),
+        }
     }
 }
 
@@ -309,28 +370,45 @@ pub struct DeviceInfo {
     pub telemetry: Option<String>,
     pub sensor: Option<Value>,
     pub upgrade: Option<UpgradeInfo>,
+    /// An upgrade is running: keep the device in view (dimmed) even while it restarts.
+    pub upgrading: bool,
+    /// Runs the latest release (or newer): no upgrade button.
+    pub up_to_date: bool,
+    /// What the upgrade button would do now.
+    pub upgrade_plan: crate::ota::PlanInfo,
+    /// Firmware channel the OtaUrl points at: "release", "development" or "custom".
+    pub ota_channel: &'static str,
+    /// The OtaUrl can be switched to the other channel.
+    pub can_switch_channel: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
 pub struct Snapshot {
     /// Version of this program (the server, for the web page).
     pub app_version: &'static str,
+    /// A newer Tasmota Derust release, when there is one.
+    pub app_update: Option<String>,
+    pub app_releases: &'static str,
     pub connected: bool,
     pub status: String,
     pub broker: String,
     pub read_only: bool,
     pub latest: Option<String>,
+    /// Latest development build (for devices whose OtaUrl points there).
+    pub latest_dev: Option<String>,
     pub latest_error: Option<String>,
     pub ssids: [Option<String>; 2],
     pub devices: Vec<DeviceInfo>,
 }
 
 impl DeviceInfo {
-    fn new(d: &Device, latest: Option<&Vec<u32>>) -> DeviceInfo {
-        let outdated = match (d.version.as_deref().and_then(device::parse_version), latest) {
-            (Some(v), Some(l)) => v < *l,
-            _ => false,
-        };
+    fn new(
+        d: &Device,
+        status: crate::ota::VersionStatus,
+        upgrade_plan: crate::ota::PlanInfo,
+    ) -> DeviceInfo {
+        let outdated = status.outdated;
+        let up_to_date = status.up_to_date;
         let trim = |s: &str| s.trim_end_matches('/').to_string();
         DeviceInfo {
             topic: d.topic.clone(),
@@ -376,6 +454,18 @@ impl DeviceInfo {
             power: d.power.clone(),
             telemetry: d.telemetry(),
             sensor: d.sensor.clone(),
+            upgrading: d.upgrade.as_ref().is_some_and(|u| u.is_active()),
+            ota_channel: match crate::ota::channel(d.ota_url.as_deref()) {
+                crate::ota::Channel::Release => "release",
+                crate::ota::Channel::Development => "development",
+                crate::ota::Channel::Custom => "custom",
+            },
+            can_switch_channel: d.ota_url.as_deref().is_some_and(|u| {
+                crate::ota::channel_url(u, true).is_some()
+                    || crate::ota::channel_url(u, false).is_some()
+            }),
+            up_to_date,
+            upgrade_plan,
             upgrade: d.upgrade.as_ref().map(|u| {
                 let (state, text) = match &u.phase {
                     UpgradePhase::Sent => ("sent", "Command sent…".to_string()),

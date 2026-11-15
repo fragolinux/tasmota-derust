@@ -58,12 +58,11 @@ subscriptions for devices whose FullTopic or prefixes are not the default `%pref
 
 When a device comes online the app sends `Status 0`, `Module`, and (until known) `SSId1`/`SSId2`.
 
-## Roadmap (not in v0.1)
+## Roadmap
 
-- Guided step-by-step upgrade path for very old firmware (e.g. 6.7.1 → 7.2.0 → 8.5.1 → 9.1.0 → latest).
+- tdmgr's advanced editors: rules, timers, switches, buttons, power settings.
 - Console per device with command history.
-- Rules, timers, buttons, switches, power settings editors.
 - MQTT over TLS, multiple brokers/sites in one window.
 - Forget/remove stale devices (clear retained discovery/LWT).
 - Web: login/password, live push (SSE) instead of polling, Home Assistant add-on / Docker image.
-- Installers, macOS notarization, Windows code signing.
+- Installers, macOS notarization, Windows code signing (applied to SignPath Foundation).

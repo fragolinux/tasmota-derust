@@ -40,6 +40,23 @@ pub struct Upgrade {
     pub started: Instant,
     pub from: Option<String>,
     pub phase: UpgradePhase,
+    /// For a step of the upgrade path: the version it must end on.
+    pub target: Option<[u32; 3]>,
+    /// For a step of the upgrade path: (step, steps).
+    pub step: Option<(usize, usize)>,
+}
+
+/// Why an upgrade did not start.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StartError {
+    Unknown,
+    Offline,
+    /// Already upgrading this device.
+    Running,
+    /// Another device is being upgraded: one at a time.
+    OtherRunning(String),
+    /// The plan says no (too old, not enough flash, size not checked yet...).
+    NotPossible(String),
 }
 
 impl Upgrade {
@@ -431,6 +448,8 @@ impl Device {
                 };
             }
         }
+        // Answer to "OtaUrl <url>".
+        set_str(&mut self.ota_url, v, "OtaUrl");
         // Some firmware answers Status commands with RESULT.
         self.parse_status(v);
     }
@@ -454,11 +473,48 @@ impl Device {
                 };
                 u.phase =
                     UpgradePhase::Progress(format!("{what} running, writing the new firmware…"));
+                // A second download and restart follow: the timeout starts again.
+                u.started = Instant::now();
+            }
+            UpgradePhase::Restarting if u.target.is_some() => {
+                let target = u.target.unwrap_or_default();
+                let now = parse_version(&version)
+                    .map(|v| [0, 1, 2].map(|i| v.get(i).copied().unwrap_or(0)));
+                let left = u
+                    .step
+                    .map(|(_, total)| total.saturating_sub(1))
+                    .unwrap_or(0);
+                u.phase = if now == Some(target) {
+                    let next = match left {
+                        0 => String::new(),
+                        1 => " 1 step left: upgrade again for the last one.".into(),
+                        n => format!(" {n} steps left: upgrade again for the next one."),
+                    };
+                    UpgradePhase::Done(format!(
+                        "Upgraded {} → {}.{next}",
+                        short_version(&from),
+                        short_version(&version)
+                    ))
+                } else if changed {
+                    UpgradePhase::Failed(format!(
+                        "Restarted with {}, expected {}.{}.{}: path stopped. Check the device, then \
+                         upgrade again to continue from there.",
+                        short_version(&version),
+                        target[0],
+                        target[1],
+                        target[2]
+                    ))
+                } else {
+                    UpgradePhase::Failed(format!(
+                        "Restarted, still {}: the step did not take. Check free flash and OtaUrl, then retry.",
+                        short_version(&version)
+                    ))
+                };
             }
             UpgradePhase::Restarting => {
                 u.phase = if changed {
                     UpgradePhase::Done(format!(
-                        "{} → {}",
+                        "Upgraded {} → {}",
                         short_version(&from),
                         short_version(&version)
                     ))
@@ -468,9 +524,16 @@ impl Device {
             }
             // Finished or failed earlier, but the device now runs another version: it did
             // upgrade after all (slow restart, or upgraded from another app).
-            UpgradePhase::Done(_) | UpgradePhase::Failed(_) | UpgradePhase::Note(_) if changed => {
+            UpgradePhase::Failed(_) | UpgradePhase::Note(_) if changed => {
                 u.phase = UpgradePhase::Done(format!(
-                    "{} → {}",
+                    "Upgraded {} → {}",
+                    short_version(&from),
+                    short_version(&version)
+                ));
+            }
+            UpgradePhase::Done(m) if changed && m.starts_with("Restarted, still") => {
+                u.phase = UpgradePhase::Done(format!(
+                    "Upgraded {} → {}",
                     short_version(&from),
                     short_version(&version)
                 ));
@@ -485,6 +548,8 @@ pub struct Store {
     pub devices: BTreeMap<String, Device>,
     /// SSId1 / SSId2 (assumed identical on all devices).
     pub ssids: [Option<String>; 2],
+    /// Firmware image sizes, for the free flash check of the upgrade path.
+    pub sizes: crate::ota::Sizes,
 }
 
 impl Store {
@@ -720,17 +785,84 @@ impl Store {
             })
     }
 
-    pub fn start_upgrade(&mut self, key: &str) -> Option<Action> {
-        let d = self.devices.get_mut(key).filter(|d| d.is_online())?;
+    /// What upgrading this device would do now (see `ota`).
+    pub fn upgrade_plan(
+        &self,
+        key: &str,
+        targets: &crate::ota::Targets,
+    ) -> Option<crate::ota::PlanInfo> {
+        self.devices
+            .get(key)
+            .map(|d| crate::ota::plan_info(d, targets, &self.sizes))
+    }
+
+    /// Starts the next upgrade (one step of the path, or the final one). Only one device at
+    /// a time, only online devices, only when the plan allows it (free flash checked).
+    pub fn start_upgrade(
+        &mut self,
+        key: &str,
+        targets: &crate::ota::Targets,
+    ) -> Result<Vec<Action>, StartError> {
+        let d = self.devices.get(key).ok_or(StartError::Unknown)?;
+        if !d.is_online() {
+            return Err(StartError::Offline);
+        }
+        if let Some((other, _)) = self
+            .devices
+            .iter()
+            .find(|(_, d)| d.upgrade.as_ref().is_some_and(|u| u.is_active()))
+        {
+            return Err(if other == key {
+                StartError::Running
+            } else {
+                StartError::OtherRunning(self.devices[other].display_name().to_string())
+            });
+        }
+        let info = crate::ota::plan_info(d, targets, &self.sizes);
+        if !info.can_start {
+            let why = info
+                .warnings
+                .last()
+                .or(info.details.last())
+                .cloned()
+                .unwrap_or(info.title);
+            return Err(StartError::NotPossible(why));
+        }
+        let plan = crate::ota::plan(
+            d.version.as_deref(),
+            d.ota_url.as_deref(),
+            crate::ota::is_esp32(d),
+        );
+        let (target, step) = match plan {
+            crate::ota::Plan::Step {
+                target,
+                index,
+                total,
+                ..
+            } => (Some(target), Some((index, total))),
+            _ => (None, None),
+        };
+        let d = self.devices.get_mut(key).ok_or(StartError::Unknown)?;
+        let mut out = Vec::new();
+        if let (true, Some(url)) = (info.sets_ota_url, info.url.as_ref()) {
+            out.push(Action::Publish {
+                topic: d.cmnd("OTAURL"),
+                payload: url.clone(),
+            });
+            d.ota_url = Some(url.clone());
+        }
+        out.push(Action::Publish {
+            topic: d.cmnd("UPGRADE"),
+            payload: "1".into(),
+        });
         d.upgrade = Some(Upgrade {
             started: Instant::now(),
             from: d.version.clone(),
             phase: UpgradePhase::Sent,
+            target,
+            step,
         });
-        Some(Action::Publish {
-            topic: d.cmnd("UPGRADE"),
-            payload: "1".into(),
-        })
+        Ok(out)
     }
 
     pub fn check_timeouts(&mut self) {
@@ -893,7 +1025,7 @@ mod tests {
         assert!(!d.is_online());
         assert_eq!(d.reachable(), None, "still waiting for the answer");
         assert!(s.command("plug", "POWER1", "TOGGLE").is_none());
-        assert!(s.start_upgrade("plug").is_none());
+        assert!(s.start_upgrade("plug", &Default::default()).is_err());
 
         s.devices.get_mut("plug").unwrap().asked = Some(long_ago(NO_ANSWER_AFTER * 2));
         let d = &s.devices["plug"];
@@ -940,7 +1072,7 @@ mod tests {
         let mut s = Store::default();
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("13.3.0(tasmota32)"));
-        assert!(s.start_upgrade("a8t").is_some());
+        assert!(s.start_upgrade("a8t", &Default::default()).is_ok());
         s.handle("tele/a8t/LWT", "Offline");
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("13.3.0(safeboot)"));
@@ -951,7 +1083,7 @@ mod tests {
         s.handle("stat/a8t/STATUS0", &status_fwr("16.0.0(tasmota32)"));
         let u = s.devices["a8t"].upgrade.as_ref().unwrap();
         assert!(
-            matches!(&u.phase, UpgradePhase::Done(m) if m == "13.3.0 → 16.0.0"),
+            matches!(&u.phase, UpgradePhase::Done(m) if m == "Upgraded 13.3.0 → 16.0.0"),
             "{:?}",
             u.phase
         );
@@ -962,7 +1094,7 @@ mod tests {
         let mut s = Store::default();
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("16.0.0(tasmota32)"));
-        s.start_upgrade("a8t");
+        s.start_upgrade("a8t", &Default::default()).unwrap();
         s.handle("tele/a8t/LWT", "Offline");
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("16.0.0(release-tasmota32)"));
@@ -979,7 +1111,7 @@ mod tests {
         let mut s = Store::default();
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("13.3.0(tasmota32)"));
-        s.start_upgrade("a8t");
+        s.start_upgrade("a8t", &Default::default()).unwrap();
         s.devices
             .get_mut("a8t")
             .unwrap()
@@ -1004,7 +1136,7 @@ mod tests {
         s.handle("stat/a8t/STATUS0", &status_fwr("16.0.0(tasmota32)"));
         let u = s.devices["a8t"].upgrade.as_ref().unwrap();
         assert!(
-            matches!(&u.phase, UpgradePhase::Done(m) if m == "13.3.0 → 16.0.0"),
+            matches!(&u.phase, UpgradePhase::Done(m) if m == "Upgraded 13.3.0 → 16.0.0"),
             "{:?}",
             u.phase
         );
