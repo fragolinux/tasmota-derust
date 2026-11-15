@@ -139,7 +139,14 @@ impl DerustApp {
         self.mqtt = Some(mqtt);
         self.rx = Some(rx);
         self.conn = Conn::Connecting;
-        self.push_log('*', &format!("connecting to {}:{}", self.cfg.broker.host, self.cfg.broker.port), "");
+        self.push_log(
+            '*',
+            &format!(
+                "connecting to {}:{}",
+                self.cfg.broker.host, self.cfg.broker.port
+            ),
+            "",
+        );
     }
 
     fn push_log(&mut self, dir: char, topic: &str, payload: &str) {
@@ -176,7 +183,11 @@ impl DerustApp {
                     self.push_log('!', "connection error", &e);
                     self.conn = Conn::Error(e);
                 }
-                MqttEvent::Message { topic, payload, retained } => {
+                MqttEvent::Message {
+                    topic,
+                    payload,
+                    retained,
+                } => {
                     self.push_log('<', &topic, &payload);
                     let actions = self.store.handle_message(&topic, &payload, retained);
                     self.apply(actions);
@@ -208,14 +219,18 @@ impl DerustApp {
     fn start_web(&mut self) {
         self.web = None;
         self.web_error = None;
-        let listen = tasmota_derust_web::DEFAULT_LISTEN.parse().expect("valid address");
+        let listen = tasmota_derust_web::DEFAULT_LISTEN
+            .parse()
+            .expect("valid address");
         match WebServer::start(&self.cfg.broker, listen, self.read_only, WEB_READ_ONLY_HINT) {
             Ok(w) => {
                 let mode = if w.read_only() { " (read-only)" } else { "" };
                 self.push_log('*', &format!("web server on {}{mode}", w.url()), "");
                 self.web = Some(w);
             }
-            Err(e) => self.web_error = Some(format!("Cannot start the web server on {listen}: {e}")),
+            Err(e) => {
+                self.web_error = Some(format!("Cannot start the web server on {listen}: {e}"))
+            }
         }
     }
 
@@ -251,7 +266,9 @@ impl DerustApp {
 
     fn notice_overlay(&mut self, ctx: &egui::Context) {
         const SHOW: Duration = Duration::from_secs(5);
-        let Some((text, since)) = &self.notice else { return };
+        let Some((text, since)) = &self.notice else {
+            return;
+        };
         if since.elapsed() > SHOW {
             self.notice = None;
             return;
@@ -292,7 +309,8 @@ impl DerustApp {
                 )
                 .on_disabled_hover_text("Configure the MQTT broker first");
             if let Some(e) = &self.web_error {
-                ui.label(RichText::new("⚠").color(RED)).on_hover_text(e.as_str());
+                ui.label(RichText::new("⚠").color(RED))
+                    .on_hover_text(e.as_str());
             }
             if start.clicked() {
                 self.start_web();
@@ -315,13 +333,18 @@ impl DerustApp {
             ui.label(RichText::new("Tasmota Derust").strong().size(16.0));
             ui.separator();
             for v in View::ALL {
-                if ui.selectable_label(self.cfg.view == v, v.label()).clicked() && self.cfg.view != v {
+                if ui.selectable_label(self.cfg.view == v, v.label()).clicked()
+                    && self.cfg.view != v
+                {
                     self.cfg.view = v;
                     self.cfg.save();
                 }
             }
             ui.separator();
-            if ui.checkbox(&mut self.cfg.show_offline, "Show offline").changed() {
+            if ui
+                .checkbox(&mut self.cfg.show_offline, "Show offline")
+                .changed()
+            {
                 self.cfg.save();
             }
             self.columns_menu(ui);
@@ -364,7 +387,8 @@ impl DerustApp {
                             ui.label("Checking latest release…");
                         }
                         Latest::Err(e) => {
-                            ui.colored_label(RED, "Latest release unknown").on_hover_text(e.as_str());
+                            ui.colored_label(RED, "Latest release unknown")
+                                .on_hover_text(e.as_str());
                         }
                     },
                     _ => {}
@@ -381,32 +405,36 @@ impl DerustApp {
         let mut reset = false;
         let config = egui::containers::menu::MenuConfig::new()
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-        egui::containers::menu::MenuButton::new("Columns").config(config).ui(ui, |ui| {
-            ui.label(RichText::new(format!("Columns in {}", view.label())).strong());
-            egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
-                if let Some(list) = self.cfg.columns.get_mut(&view) {
-                    let n = list.len();
-                    for i in 0..n {
-                        ui.horizontal(|ui| {
-                            if arrow_button(ui, true, i > 0) {
-                                swap = Some((i, i - 1));
+        egui::containers::menu::MenuButton::new("Columns")
+            .config(config)
+            .ui(ui, |ui| {
+                ui.label(RichText::new(format!("Columns in {}", view.label())).strong());
+                egui::ScrollArea::vertical()
+                    .max_height(480.0)
+                    .show(ui, |ui| {
+                        if let Some(list) = self.cfg.columns.get_mut(&view) {
+                            let n = list.len();
+                            for i in 0..n {
+                                ui.horizontal(|ui| {
+                                    if arrow_button(ui, true, i > 0) {
+                                        swap = Some((i, i - 1));
+                                    }
+                                    if arrow_button(ui, false, i + 1 < n) {
+                                        swap = Some((i, i + 1));
+                                    }
+                                    let title = list[i].col.title();
+                                    if ui.checkbox(&mut list[i].visible, title).changed() {
+                                        changed = true;
+                                    }
+                                });
                             }
-                            if arrow_button(ui, false, i + 1 < n) {
-                                swap = Some((i, i + 1));
-                            }
-                            let title = list[i].col.title();
-                            if ui.checkbox(&mut list[i].visible, title).changed() {
-                                changed = true;
-                            }
-                        });
-                    }
+                        }
+                    });
+                ui.separator();
+                if ui.button("Reset to defaults").clicked() {
+                    reset = true;
                 }
             });
-            ui.separator();
-            if ui.button("Reset to defaults").clicked() {
-                reset = true;
-            }
-        });
         if let Some((a, b)) = swap {
             if let Some(list) = self.cfg.columns.get_mut(&view) {
                 list.swap(a, b);
@@ -427,18 +455,34 @@ impl DerustApp {
             let (text, color) = match &self.conn {
                 Conn::NotConfigured => ("Broker not configured".to_string(), GRAY),
                 Conn::Connecting => (format!("Connecting to {}…", self.cfg.broker.host), YELLOW),
-                Conn::Connected => {
-                    (format!("Connected to {}:{}", self.cfg.broker.host, self.cfg.broker.port), GREEN)
-                }
+                Conn::Connected => (
+                    format!(
+                        "Connected to {}:{}",
+                        self.cfg.broker.host, self.cfg.broker.port
+                    ),
+                    GREEN,
+                ),
                 Conn::Error(e) => (format!("Disconnected: {e}"), RED),
             };
             dot(ui, color);
             ui.label(text);
             ui.separator();
             let total = self.store.devices.len();
-            let online = self.store.devices.values().filter(|d| d.is_online()).count();
-            let offline = self.store.devices.values().filter(|d| d.is_offline()).count();
-            ui.label(format!("{total} devices · {online} online · {offline} offline"));
+            let online = self
+                .store
+                .devices
+                .values()
+                .filter(|d| d.is_online())
+                .count();
+            let offline = self
+                .store
+                .devices
+                .values()
+                .filter(|d| d.is_offline())
+                .count();
+            ui.label(format!(
+                "{total} devices · {online} online · {offline} offline"
+            ));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.toggle_value(&mut self.log_open, "Log").on_hover_text(
                     "MQTT messages of all devices: received (<), sent (>) and connection events",
@@ -469,11 +513,10 @@ impl DerustApp {
             })
             .collect();
         let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
-        egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show_rows(
-            ui,
-            row_h,
-            lines.len(),
-            |ui, range| {
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .auto_shrink(false)
+            .show_rows(ui, row_h, lines.len(), |ui, range| {
                 for l in &lines[range] {
                     let color = match l.dir {
                         '>' => ORANGE,
@@ -487,8 +530,7 @@ impl DerustApp {
                             .color(color),
                     );
                 }
-            },
-        );
+            });
     }
 
     // ------------------------------------------------------------------ table
@@ -514,7 +556,11 @@ impl DerustApp {
         rows.sort_by(|a, b| {
             let o = compare(a, b, sort);
             let o = if self.sort_desc { o.reverse() } else { o };
-            o.then_with(|| a.display_name().to_lowercase().cmp(&b.display_name().to_lowercase()))
+            o.then_with(|| {
+                a.display_name()
+                    .to_lowercase()
+                    .cmp(&b.display_name().to_lowercase())
+            })
         });
 
         if rows.is_empty() {
@@ -543,13 +589,18 @@ impl DerustApp {
             tb.header(ROW_HEIGHT, |mut h| {
                 h.col(|ui| header_cell(ui, "Device", sort.is_none(), desc, None, actions));
                 for c in &cols {
-                    h.col(|ui| header_cell(ui, c.title(), sort == Some(*c), desc, Some(*c), actions));
+                    h.col(|ui| {
+                        header_cell(ui, c.title(), sort == Some(*c), desc, Some(*c), actions)
+                    });
                 }
             })
             .body(|body| {
                 body.rows(ROW_HEIGHT, rows.len(), |mut row| {
                     let d = rows[row.index()];
-                    let ci = CellCtx { dim: d.is_offline(), ..info_ref(&info) };
+                    let ci = CellCtx {
+                        dim: d.is_offline(),
+                        ..info_ref(&info)
+                    };
                     row.col(|ui| device_cell(ui, d, actions));
                     for c in &cols {
                         row.col(|ui| cell(ui, d, *c, &ci, actions));
@@ -562,11 +613,16 @@ impl DerustApp {
     fn handle_actions(&mut self, actions: Vec<UiAction>) {
         for a in actions {
             match a {
-                UiAction::Toggle(..) | UiAction::AskUpgrade(_) | UiAction::AskAp(..) if self.read_only => {
+                UiAction::Toggle(..) | UiAction::AskUpgrade(_) | UiAction::AskAp(..)
+                    if self.read_only =>
+                {
                     self.show_notice(READ_ONLY_NOTICE);
                 }
                 UiAction::Toggle(key, i) => {
-                    if let Some(x) = self.store.command(&key, &format!("POWER{}", i + 1), "TOGGLE") {
+                    if let Some(x) = self
+                        .store
+                        .command(&key, &format!("POWER{}", i + 1), "TOGGLE")
+                    {
                         self.apply(vec![x]);
                     }
                 }
@@ -601,22 +657,29 @@ impl DerustApp {
             .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .open(&mut open)
             .show(ctx, |ui| {
-                egui::Grid::new("broker").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                    ui.label("Host");
-                    ui.text_edit_singleline(&mut self.draft.host);
-                    ui.end_row();
-                    ui.label("Port");
-                    ui.add(egui::DragValue::new(&mut self.draft.port).range(1..=65535));
-                    ui.end_row();
-                    ui.label("Username");
-                    ui.text_edit_singleline(&mut self.draft.username);
-                    ui.end_row();
-                    ui.label("Password");
-                    ui.add(egui::TextEdit::singleline(&mut self.draft.password).password(true));
-                    ui.end_row();
-                });
+                egui::Grid::new("broker")
+                    .num_columns(2)
+                    .spacing([12.0, 8.0])
+                    .show(ui, |ui| {
+                        ui.label("Host");
+                        ui.text_edit_singleline(&mut self.draft.host);
+                        ui.end_row();
+                        ui.label("Port");
+                        ui.add(egui::DragValue::new(&mut self.draft.port).range(1..=65535));
+                        ui.end_row();
+                        ui.label("Username");
+                        ui.text_edit_singleline(&mut self.draft.username);
+                        ui.end_row();
+                        ui.label("Password");
+                        ui.add(egui::TextEdit::singleline(&mut self.draft.password).password(true));
+                        ui.end_row();
+                    });
                 ui.add_space(4.0);
-                ui.label(RichText::new("Saved in plain text in the app's config file.").small().weak());
+                ui.label(
+                    RichText::new("Saved in plain text in the app's config file.")
+                        .small()
+                        .weak(),
+                );
                 ui.add_space(4.0);
                 if ui.button("Save and connect").clicked() {
                     connect = true;
@@ -781,7 +844,12 @@ impl eframe::App for DerustApp {
 // -------------------------------------------------------------------- helpers
 
 fn info_ref<'a>(i: &CellCtx<'a>) -> CellCtx<'a> {
-    CellCtx { latest: i.latest.clone(), latest_str: i.latest_str, ssids: i.ssids, dim: i.dim }
+    CellCtx {
+        latest: i.latest.clone(),
+        latest_str: i.latest_str,
+        ssids: i.ssids,
+        dim: i.dim,
+    }
 }
 
 fn rssi_color(rssi: i64) -> Color32 {
@@ -812,8 +880,15 @@ fn chip(ui: &mut egui::Ui, text: &str, fill: Color32) -> egui::Response {
 fn boxed(ui: &mut egui::Ui, text: &str, fill: Color32, sense: Sense) -> egui::Response {
     let size = vec2(ui.available_width(), ROW_HEIGHT - 4.0);
     let (rect, resp) = ui.allocate_exact_size(size, sense);
-    ui.painter().rect_filled(rect.shrink2(vec2(2.0, 1.0)), 2.0, fill);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(14.0), Color32::BLACK);
+    ui.painter()
+        .rect_filled(rect.shrink2(vec2(2.0, 1.0)), 2.0, fill);
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        text,
+        FontId::proportional(14.0),
+        Color32::BLACK,
+    );
     resp
 }
 
@@ -844,12 +919,17 @@ fn triangle(ui: &egui::Ui, rect: egui::Rect, up: bool, color: Color32) {
     } else {
         vec![c + vec2(-w, -h), c + vec2(w, -h), c + vec2(0.0, h)]
     };
-    ui.painter().add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+    ui.painter()
+        .add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
 }
 
 /// Tiny up/down button used to reorder columns.
 fn arrow_button(ui: &mut egui::Ui, up: bool, enabled: bool) -> bool {
-    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
     let (rect, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), sense);
     let color = if !enabled {
         GRAY.gamma_multiply(0.4)
@@ -888,8 +968,19 @@ fn signal_icon(ui: &mut egui::Ui, d: &Device) {
     for i in 0..4 {
         let h = 4.0 + i as f32 * 3.0;
         let x = rect.left() + 1.0 + i as f32 * 4.0;
-        let bar = egui::Rect::from_min_max(egui::pos2(x, rect.bottom() - 1.0 - h), egui::pos2(x + 3.0, rect.bottom() - 1.0));
-        p.rect_filled(bar, 0.0, if i < level { color } else { GRAY.gamma_multiply(0.5) });
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(x, rect.bottom() - 1.0 - h),
+            egui::pos2(x + 3.0, rect.bottom() - 1.0),
+        );
+        p.rect_filled(
+            bar,
+            0.0,
+            if i < level {
+                color
+            } else {
+                GRAY.gamma_multiply(0.5)
+            },
+        );
     }
 }
 
@@ -902,7 +993,8 @@ fn device_cell(ui: &mut egui::Ui, d: &Device, actions: &mut Vec<UiAction>) {
         } else {
             "is offline"
         };
-        ui.label(RichText::new(name).italics().weak()).on_hover_text(format!("{} {why}", d.topic));
+        ui.label(RichText::new(name).italics().weak())
+            .on_hover_text(format!("{} {why}", d.topic));
     } else if let Some(url) = d.web_url() {
         let r = ui.link(name).on_hover_text(format!("Open web UI: {url}"));
         if r.clicked() {
@@ -927,10 +1019,18 @@ fn opt<T: ToString>(v: &Option<T>) -> String {
 /// Plain-text value of a column (also used for sorting).
 fn cell_text(d: &Device, col: Col) -> String {
     match col {
-        Col::Power => d.power.iter().filter(|p| **p == Some(true)).count().to_string(),
+        Col::Power => d
+            .power
+            .iter()
+            .filter(|p| **p == Some(true))
+            .count()
+            .to_string(),
         Col::Telemetry => d.telemetry().unwrap_or_default(),
         Col::Module => opt(&d.module),
-        Col::Uptime => d.current_uptime().map(device::format_duration).unwrap_or_default(),
+        Col::Uptime => d
+            .current_uptime()
+            .map(device::format_duration)
+            .unwrap_or_default(),
         Col::LoadAvg => opt(&d.load_avg),
         Col::LinkCount => opt(&d.link_count),
         Col::BootCount => opt(&d.boot_count),
@@ -940,11 +1040,24 @@ fn cell_text(d: &Device, col: Col) -> String {
         Col::Downtime => d
             .downtime
             .as_deref()
-            .map(|s| device::parse_duration(s).map(device::format_duration).unwrap_or_else(|| s.to_string()))
+            .map(|s| {
+                device::parse_duration(s)
+                    .map(device::format_duration)
+                    .unwrap_or_else(|| s.to_string())
+            })
             .unwrap_or_default(),
         Col::Rssi => opt(&d.rssi),
-        Col::Version => d.version.as_deref().map(device::short_version).unwrap_or_default().to_string(),
-        Col::Core => d.core.as_deref().map(|c| c.replace('_', ".")).unwrap_or_default(),
+        Col::Version => d
+            .version
+            .as_deref()
+            .map(device::short_version)
+            .unwrap_or_default()
+            .to_string(),
+        Col::Core => d
+            .core
+            .as_deref()
+            .map(|c| c.replace('_', "."))
+            .unwrap_or_default(),
         Col::Sdk => opt(&d.sdk),
         Col::ProgramSize => opt(&d.program_size),
         Col::Free => opt(&d.free),
@@ -972,7 +1085,11 @@ fn sort_num(d: &Device, col: Col) -> Option<f64> {
     let n = |v: Option<i64>| v.map(|x| x as f64);
     match col {
         Col::Uptime => d.current_uptime().map(|x| x as f64),
-        Col::Downtime => d.downtime.as_deref().and_then(device::parse_duration).map(|x| x as f64),
+        Col::Downtime => d
+            .downtime
+            .as_deref()
+            .and_then(device::parse_duration)
+            .map(|x| x as f64),
         Col::LoadAvg => n(d.load_avg),
         Col::LinkCount => n(d.link_count),
         Col::BootCount => n(d.boot_count),
@@ -993,7 +1110,10 @@ fn sort_num(d: &Device, col: Col) -> Option<f64> {
 
 fn compare(a: &Device, b: &Device, col: Option<Col>) -> Ordering {
     let Some(col) = col else {
-        return a.display_name().to_lowercase().cmp(&b.display_name().to_lowercase());
+        return a
+            .display_name()
+            .to_lowercase()
+            .cmp(&b.display_name().to_lowercase());
     };
     match (sort_num(a, col), sort_num(b, col)) {
         (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
@@ -1011,9 +1131,14 @@ fn compare(a: &Device, b: &Device, col: Option<Col>) -> Ordering {
 }
 
 fn text_label(ui: &mut egui::Ui, text: String, numeric: bool, dim: bool) -> egui::Response {
-    let rt = if dim { RichText::new(text).weak() } else { RichText::new(text) };
+    let rt = if dim {
+        RichText::new(text).weak()
+    } else {
+        RichText::new(text)
+    };
     if numeric {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(rt)).inner
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(rt))
+            .inner
     } else {
         ui.label(rt)
     }
@@ -1027,7 +1152,10 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
             for (i, st) in d.power.iter().enumerate() {
                 let label = format!("{}", i + 1);
                 let btn = match st {
-                    Some(true) => egui::Button::new(RichText::new(label).color(Color32::BLACK).strong()).fill(GREEN),
+                    Some(true) => {
+                        egui::Button::new(RichText::new(label).color(Color32::BLACK).strong())
+                            .fill(GREEN)
+                    }
                     Some(false) => egui::Button::new(RichText::new(label)),
                     None => egui::Button::new(RichText::new(label).weak()),
                 }
@@ -1052,11 +1180,17 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
             }
         }
         Col::Ap => {
-            let Some(ap) = d.ap.filter(|_| !ci.dim) else { return };
+            let Some(ap) = d.ap.filter(|_| !ci.dim) else {
+                return;
+            };
             let has_second = ci.ssids[1].as_deref().is_some_and(|s| !s.is_empty());
             let other = if ap == 1 { 2 } else { 1 };
             let size = vec2(ui.available_width(), ROW_HEIGHT - 4.0);
-            let sense = if online && has_second { Sense::click() } else { Sense::hover() };
+            let sense = if online && has_second {
+                Sense::click()
+            } else {
+                Sense::hover()
+            };
             let (rect, resp) = ui.allocate_exact_size(size, sense);
             let n = if has_second { 2 } else { 1 };
             let w = 20.0;
@@ -1065,11 +1199,24 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
                 let num = k as i64 + 1;
                 let fill = if num == ap { GREEN } else { RED };
                 let x = start + k as f32 * (w + 3.0);
-                let r = egui::Rect::from_min_size(egui::pos2(x, rect.top() + 1.0), vec2(w, rect.height() - 2.0));
+                let r = egui::Rect::from_min_size(
+                    egui::pos2(x, rect.top() + 1.0),
+                    vec2(w, rect.height() - 2.0),
+                );
                 ui.painter().rect_filled(r, 2.0, fill);
-                ui.painter().text(r.center(), Align2::CENTER_CENTER, num.to_string(), FontId::proportional(14.0), Color32::BLACK);
+                ui.painter().text(
+                    r.center(),
+                    Align2::CENTER_CENTER,
+                    num.to_string(),
+                    FontId::proportional(14.0),
+                    Color32::BLACK,
+                );
             }
-            let name = |i: i64| ci.ssids[(i - 1).clamp(0, 1) as usize].clone().unwrap_or_default();
+            let name = |i: i64| {
+                ci.ssids[(i - 1).clamp(0, 1) as usize]
+                    .clone()
+                    .unwrap_or_default()
+            };
             let resp = if has_second {
                 resp.on_hover_text(format!(
                     "Connected to SSId {ap} ({}). Click to switch to SSId {other} ({}).",
@@ -1097,13 +1244,15 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
         Col::Version => {
             let text = cell_text(d, col);
             if is_outdated(d, &ci.latest) && !ci.dim {
-                ui.label(RichText::new(text).color(ORANGE).strong()).on_hover_text(format!(
-                    "{} — latest release is {}",
-                    d.version.as_deref().unwrap_or(""),
-                    ci.latest_str.unwrap_or("?")
-                ));
+                ui.label(RichText::new(text).color(ORANGE).strong())
+                    .on_hover_text(format!(
+                        "{} — latest release is {}",
+                        d.version.as_deref().unwrap_or(""),
+                        ci.latest_str.unwrap_or("?")
+                    ));
             } else {
-                text_label(ui, text, false, ci.dim).on_hover_text(d.version.as_deref().unwrap_or(""));
+                text_label(ui, text, false, ci.dim)
+                    .on_hover_text(d.version.as_deref().unwrap_or(""));
             }
         }
         Col::Update => {
@@ -1115,7 +1264,11 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
                 } else {
                     egui::Button::new("Upgrade…")
                 };
-                let hint = if outdated { "A newer release is available" } else { "Upgrade from OtaUrl" };
+                let hint = if outdated {
+                    "A newer release is available"
+                } else {
+                    "Upgrade from OtaUrl"
+                };
                 if ui.add_enabled(online, btn).on_hover_text(hint).clicked() {
                     actions.push(UiAction::AskUpgrade(d.topic.clone()));
                 }
@@ -1141,7 +1294,8 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
                         ui.colored_label(RED, m.as_str()).on_hover_text(m.as_str());
                     }
                     UpgradePhase::Note(m) => {
-                        ui.label(RichText::new(m.as_str()).weak()).on_hover_text(m.as_str());
+                        ui.label(RichText::new(m.as_str()).weak())
+                            .on_hover_text(m.as_str());
                     }
                 }
             }
@@ -1150,7 +1304,10 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
             let text = cell_text(d, col);
             if !text.is_empty() {
                 let r = text_label(ui, text.clone(), col.numeric(), ci.dim);
-                if matches!(col, Col::OtaUrl | Col::Hostname | Col::RestartReason | Col::Module) {
+                if matches!(
+                    col,
+                    Col::OtaUrl | Col::Hostname | Col::RestartReason | Col::Module
+                ) {
                     r.on_hover_text(text);
                 }
             }

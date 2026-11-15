@@ -12,7 +12,13 @@ pub enum View {
 }
 
 impl View {
-    pub const ALL: [View; 5] = [View::Home, View::Health, View::Firmware, View::Wifi, View::Mqtt];
+    pub const ALL: [View; 5] = [
+        View::Home,
+        View::Health,
+        View::Firmware,
+        View::Wifi,
+        View::Mqtt,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -29,14 +35,28 @@ impl View {
         match self {
             View::Home => &[Power, Telemetry, Module, Uptime, Rssi],
             View::Health => &[
-                Uptime, BootCount, RestartReason, LoadAvg, Sleep, MqttCount, LinkCount, Downtime, Rssi,
+                Uptime,
+                BootCount,
+                RestartReason,
+                LoadAvg,
+                Sleep,
+                MqttCount,
+                LinkCount,
+                Downtime,
+                Rssi,
             ],
             View::Firmware => &[Version, Core, Sdk, ProgramSize, Free, OtaUrl, Update],
             View::Wifi => &[
                 Hostname, Mac, Ip, Gateway, Ssid, Ap, Bssid, Channel, Rssi, LinkCount, Downtime,
             ],
             View::Mqtt => &[
-                Topic, FullTopic, CommandTopic, StatTopic, TeleTopic, FallbackTopic, GroupTopic,
+                Topic,
+                FullTopic,
+                CommandTopic,
+                StatTopic,
+                TeleTopic,
+                FallbackTopic,
+                GroupTopic,
             ],
         }
     }

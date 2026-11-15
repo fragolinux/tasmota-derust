@@ -18,7 +18,12 @@ pub struct BrokerConfig {
 
 impl Default for BrokerConfig {
     fn default() -> Self {
-        Self { host: String::new(), port: 1883, username: String::new(), password: String::new() }
+        Self {
+            host: String::new(),
+            port: 1883,
+            username: String::new(),
+            password: String::new(),
+        }
     }
 }
 
@@ -78,7 +83,10 @@ impl Config {
     /// Makes sure every view lists every column exactly once.
     fn normalize(&mut self) {
         for view in View::ALL {
-            let list = self.columns.entry(view).or_insert_with(|| default_columns(view));
+            let list = self
+                .columns
+                .entry(view)
+                .or_insert_with(|| default_columns(view));
             let mut seen = Vec::new();
             list.retain(|c| {
                 let fresh = !seen.contains(&c.col);
@@ -87,7 +95,10 @@ impl Config {
             });
             for col in Col::ALL {
                 if !list.iter().any(|c| c.col == col) {
-                    list.push(ColumnSetting { col, visible: false });
+                    list.push(ColumnSetting {
+                        col,
+                        visible: false,
+                    });
                 }
             }
         }
@@ -107,5 +118,8 @@ impl Config {
 }
 
 fn default_columns(view: View) -> Vec<ColumnSetting> {
-    view.default_columns().iter().map(|&col| ColumnSetting { col, visible: true }).collect()
+    view.default_columns()
+        .iter()
+        .map(|&col| ColumnSetting { col, visible: true })
+        .collect()
 }

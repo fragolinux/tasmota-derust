@@ -50,7 +50,10 @@ pub fn router(session: Arc<Session>, read_only_hint: &str) -> Router {
         .route("/api/devices/{topic}/power/{n}", post(api_power))
         .route("/api/devices/{topic}/ap/{n}", post(api_ap))
         .route("/api/devices/{topic}/upgrade", post(api_upgrade))
-        .with_state(AppState { session, read_only_hint: read_only_hint.into() })
+        .with_state(AppState {
+            session,
+            read_only_hint: read_only_hint.into(),
+        })
 }
 
 /// This computer's address on the local network (the interface that would be used to
@@ -96,19 +99,30 @@ impl WebServer {
         let session = Arc::new(Session::start(broker, read_only, Arc::new(|| {})));
         let app = router(session.clone(), read_only_hint);
         let (tx, rx) = oneshot::channel::<()>();
-        let thread = std::thread::Builder::new().name("web".into()).spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build();
-            let Ok(rt) = rt else { return };
-            rt.block_on(async move {
-                let Ok(listener) = tokio::net::TcpListener::from_std(listener) else { return };
-                let _ = axum::serve(listener, app)
-                    .with_graceful_shutdown(async {
-                        let _ = rx.await;
-                    })
-                    .await;
-            });
-        })?;
-        Ok(WebServer { addr, session, shutdown: Some(tx), thread: Some(thread) })
+        let thread = std::thread::Builder::new()
+            .name("web".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build();
+                let Ok(rt) = rt else { return };
+                rt.block_on(async move {
+                    let Ok(listener) = tokio::net::TcpListener::from_std(listener) else {
+                        return;
+                    };
+                    let _ = axum::serve(listener, app)
+                        .with_graceful_shutdown(async {
+                            let _ = rx.await;
+                        })
+                        .await;
+                });
+            })?;
+        Ok(WebServer {
+            addr,
+            session,
+            shutdown: Some(tx),
+            thread: Some(thread),
+        })
     }
 
     pub fn addr(&self) -> SocketAddr {
@@ -151,7 +165,10 @@ impl Drop for WebServer {
 }
 
 async fn api_state(State(st): State<AppState>) -> Json<StateReply> {
-    Json(StateReply { snapshot: st.session.snapshot(), read_only_hint: st.read_only_hint.to_string() })
+    Json(StateReply {
+        snapshot: st.session.snapshot(),
+        read_only_hint: st.read_only_hint.to_string(),
+    })
 }
 
 /// Read queries only (Status 0, Module, SSId): allowed in read-only mode too.
@@ -174,7 +191,10 @@ fn reply(st: &AppState, r: Result<(), CommandError>) -> Response {
     (code, r.unwrap_err().message()).into_response()
 }
 
-async fn api_power(State(st): State<AppState>, Path((topic, n)): Path<(String, usize)>) -> Response {
+async fn api_power(
+    State(st): State<AppState>,
+    Path((topic, n)): Path<(String, usize)>,
+) -> Response {
     reply(&st, st.session.toggle_power(&topic, n))
 }
 
@@ -203,22 +223,36 @@ mod tests {
     #[test]
     fn embedded_server_serves_and_stops() {
         // Port 1 on loopback: nothing listens there, so no real broker is ever contacted.
-        let broker = BrokerConfig { host: "127.0.0.1".into(), port: 1, ..Default::default() };
-        let w = WebServer::start(&broker, "0.0.0.0:0".parse().unwrap(), true, "Untick it.").unwrap();
+        let broker = BrokerConfig {
+            host: "127.0.0.1".into(),
+            port: 1,
+            ..Default::default()
+        };
+        let w =
+            WebServer::start(&broker, "0.0.0.0:0".parse().unwrap(), true, "Untick it.").unwrap();
         let addr = SocketAddr::from(([127, 0, 0, 1], w.addr().port()));
         assert!(!w.url().contains("0.0.0.0"), "url: {}", w.url());
 
-        let page = http(addr, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        let page = http(
+            addr,
+            "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
         assert!(page.starts_with("HTTP/1.1 200") && page.contains("<html"));
 
-        let state = http(addr, "GET /api/state HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        let state = http(
+            addr,
+            "GET /api/state HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
         assert!(state.contains("\"read_only\":true"));
 
         let cmd = http(
             addr,
             "POST /api/devices/x/power/1 HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
         );
-        assert!(cmd.starts_with("HTTP/1.1 403") && cmd.contains("Untick it."), "{cmd}");
+        assert!(
+            cmd.starts_with("HTTP/1.1 403") && cmd.contains("Untick it."),
+            "{cmd}"
+        );
         assert!(state.contains("\"read_only_hint\":\"Untick it.\""));
 
         // Switching read-only off reaches the web session at once (the device is unknown,

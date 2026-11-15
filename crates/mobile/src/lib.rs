@@ -199,7 +199,9 @@ impl Session {
             username: broker.username,
             password: broker.password,
         };
-        Arc::new(Session { inner: session::Session::start(&cfg, read_only, Arc::new(|| {})) })
+        Arc::new(Session {
+            inner: session::Session::start(&cfg, read_only, Arc::new(|| {})),
+        })
     }
 
     /// Turns read-only mode on or off without reconnecting.

@@ -12,14 +12,23 @@ use crate::Notify;
 use crate::config::BrokerConfig;
 
 /// Topics subscribed on every (re)connection.
-const BASE_TOPICS: &[&str] = &["tasmota/discovery/+/config", "+/+/LWT", "tele/+/+", "stat/+/+"];
+const BASE_TOPICS: &[&str] = &[
+    "tasmota/discovery/+/config",
+    "+/+/LWT",
+    "tele/+/+",
+    "stat/+/+",
+];
 
 #[derive(Debug)]
 pub enum MqttEvent {
     Connected,
     Disconnected(String),
     /// `retained`: replayed by the broker on subscribe, not sent just now.
-    Message { topic: String, payload: String, retained: bool },
+    Message {
+        topic: String,
+        payload: String,
+        retained: bool,
+    },
 }
 
 pub struct Mqtt {
@@ -56,15 +65,31 @@ impl Mqtt {
         thread::Builder::new()
             .name("mqtt".into())
             .spawn(move || {
-                run(&mut connection, &thread_client, &thread_stop, &thread_extra, &tx, &notify)
+                run(
+                    &mut connection,
+                    &thread_client,
+                    &thread_stop,
+                    &thread_extra,
+                    &tx,
+                    &notify,
+                )
             })
             .expect("spawn mqtt thread");
 
-        (Mqtt { client, stop, extra_topics }, rx)
+        (
+            Mqtt {
+                client,
+                stop,
+                extra_topics,
+            },
+            rx,
+        )
     }
 
     pub fn publish(&self, topic: &str, payload: &str) {
-        let _ = self.client.try_publish(topic, QoS::AtMostOnce, false, payload.as_bytes().to_vec());
+        let _ = self
+            .client
+            .try_publish(topic, QoS::AtMostOnce, false, payload.as_bytes().to_vec());
     }
 
     /// Adds a subscription that is also restored after reconnects.

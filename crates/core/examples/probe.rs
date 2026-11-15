@@ -2,8 +2,6 @@
 //! device parser understood. Passive: it only subscribes and never publishes anything.
 //! Usage: cargo run --example probe [seconds]
 
-
-
 use tasmota_derust_core::device;
 
 use std::time::{Duration, Instant};
@@ -11,12 +9,16 @@ use std::time::{Duration, Instant};
 use rumqttc::{Client, Event, MqttOptions, Packet, QoS};
 
 fn main() {
-    let secs: u64 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(8);
+    let secs: u64 = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8);
     let path = directories::ProjectDirs::from("", "", "tasmota-derust")
         .unwrap()
         .config_dir()
         .join("config.json");
-    let cfg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let cfg: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let b = &cfg["broker"];
     let mut opts = MqttOptions::new(
         "tasmota-derust-probe",
@@ -34,7 +36,12 @@ fn main() {
     while start.elapsed() < Duration::from_secs(secs) {
         match conn.recv_timeout(Duration::from_millis(200)) {
             Ok(Ok(Event::Incoming(Packet::ConnAck(_)))) => {
-                for t in ["tasmota/discovery/+/config", "+/+/LWT", "tele/+/+", "stat/+/+"] {
+                for t in [
+                    "tasmota/discovery/+/config",
+                    "+/+/LWT",
+                    "tele/+/+",
+                    "stat/+/+",
+                ] {
                     client.subscribe(t, QoS::AtMostOnce).unwrap();
                 }
             }
@@ -51,12 +58,20 @@ fn main() {
             _ => {}
         }
     }
-    println!("{msgs} messages, {} devices, SSIDs {:?}\n", store.devices.len(), store.ssids);
+    println!(
+        "{msgs} messages, {} devices, SSIDs {:?}\n",
+        store.devices.len(),
+        store.ssids
+    );
     for d in store.devices.values() {
         println!(
             "{:<28} {:<8} relays={:?} ap={:?} rssi={:?} ver={:?} module={:?} ip={:?} up={:?} tele={:?}",
             d.display_name(),
-            match d.online { Some(true) => "online", Some(false) => "OFFLINE", None => "?" },
+            match d.online {
+                Some(true) => "online",
+                Some(false) => "OFFLINE",
+                None => "?",
+            },
             d.power,
             d.ap,
             d.rssi,

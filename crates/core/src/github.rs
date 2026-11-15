@@ -15,11 +15,12 @@ pub fn fetch_latest(notify: crate::Notify) -> Arc<Mutex<Latest>> {
     let out = state.clone();
     thread::spawn(move || {
         let result = (|| -> Result<String, String> {
-            let mut resp = ureq::get("https://api.github.com/repos/arendst/Tasmota/releases/latest")
-                .header("User-Agent", "tasmota-derust")
-                .header("Accept", "application/vnd.github+json")
-                .call()
-                .map_err(|e| e.to_string())?;
+            let mut resp =
+                ureq::get("https://api.github.com/repos/arendst/Tasmota/releases/latest")
+                    .header("User-Agent", "tasmota-derust")
+                    .header("Accept", "application/vnd.github+json")
+                    .call()
+                    .map_err(|e| e.to_string())?;
             let v: serde_json::Value = resp.body_mut().read_json().map_err(|e| e.to_string())?;
             v.get("tag_name")
                 .and_then(|t| t.as_str())

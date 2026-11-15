@@ -7,7 +7,9 @@ use std::sync::mpsc;
 
 use super::*;
 
-const STEPS: &[&str] = &["home", "health", "firmware", "wifi", "mqtt", "log", "settings"];
+const STEPS: &[&str] = &[
+    "home", "health", "firmware", "wifi", "mqtt", "log", "settings",
+];
 
 pub(super) struct Shots {
     dir: PathBuf,
@@ -24,13 +26,22 @@ impl Shots {
         std::fs::create_dir_all(&dir).ok()?;
         // Leaves time for the devices to report in.
         let (done_tx, done_rx) = mpsc::channel();
-        Some(Shots { dir, step: 0, at: Instant::now() + Duration::from_secs(6), waiting: false, done_tx, done_rx })
+        Some(Shots {
+            dir,
+            step: 0,
+            at: Instant::now() + Duration::from_secs(6),
+            waiting: false,
+            done_tx,
+            done_rx,
+        })
     }
 }
 
 impl DerustApp {
     pub(super) fn screenshot_tick(&mut self, ctx: &egui::Context) {
-        let Some(mut s) = self.shots.take() else { return };
+        let Some(mut s) = self.shots.take() else {
+            return;
+        };
 
         if s.done_rx.try_recv().is_ok() {
             s.waiting = false;
@@ -65,15 +76,15 @@ impl DerustApp {
                 let path = s.dir.join(format!("desktop-{}.png", STEPS[s.step]));
                 let done = s.done_tx.clone();
                 let repaint = ctx.clone();
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(
-                    move |image| {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                    egui::ScreenshotCallback::new(move |image| {
                         if let Err(e) = save_png(&path, &image) {
                             eprintln!("{}: {e}", path.display());
                         }
                         let _ = done.send(());
                         repaint.request_repaint();
-                    },
-                )));
+                    }),
+                ));
                 s.waiting = true;
             }
         }
@@ -84,7 +95,11 @@ impl DerustApp {
 
 fn save_png(path: &Path, image: &egui::ColorImage) -> std::io::Result<()> {
     let [w, h] = image.size;
-    let mut enc = png::Encoder::new(std::io::BufWriter::new(std::fs::File::create(path)?), w as u32, h as u32);
+    let mut enc = png::Encoder::new(
+        std::io::BufWriter::new(std::fs::File::create(path)?),
+        w as u32,
+        h as u32,
+    );
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
     let data: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();

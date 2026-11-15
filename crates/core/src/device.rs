@@ -44,7 +44,10 @@ pub struct Upgrade {
 
 impl Upgrade {
     pub fn is_active(&self) -> bool {
-        matches!(self.phase, UpgradePhase::Sent | UpgradePhase::Progress(_) | UpgradePhase::Restarting)
+        matches!(
+            self.phase,
+            UpgradePhase::Sent | UpgradePhase::Progress(_) | UpgradePhase::Restarting
+        )
     }
 }
 
@@ -117,7 +120,10 @@ impl Device {
     }
 
     fn expand(&self, prefix: &str) -> String {
-        let mut s = self.full_topic.replace("%prefix%", prefix).replace("%topic%", &self.topic);
+        let mut s = self
+            .full_topic
+            .replace("%prefix%", prefix)
+            .replace("%topic%", &self.topic);
         if let Some(h) = &self.hostname {
             s = s.replace("%hostname%", h);
         }
@@ -200,12 +206,18 @@ impl Device {
 
     pub fn current_uptime(&self) -> Option<u64> {
         self.uptime.map(|(secs, at)| {
-            if self.is_online() { secs + at.elapsed().as_secs() } else { secs }
+            if self.is_online() {
+                secs + at.elapsed().as_secs()
+            } else {
+                secs
+            }
         })
     }
 
     pub fn fallback_topic(&self) -> Option<String> {
-        self.mqtt_client.as_ref().map(|c| format!("{}/{}_fb/", self.prefixes[0], c))
+        self.mqtt_client
+            .as_ref()
+            .map(|c| format!("{}/{}_fb/", self.prefixes[0], c))
     }
 
     /// Short summary of the most useful telemetry value(s).
@@ -226,7 +238,11 @@ impl Device {
                 break;
             }
         }
-        if parts.is_empty() { None } else { Some(parts.join("  ")) }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("  "))
+        }
     }
 
     /// LWT received. Every LWT starts over: the device is asked for its full status again
@@ -267,7 +283,9 @@ impl Device {
         let Some(o) = v.as_object() else { return };
         for (k, val) in o {
             let ku = k.to_ascii_uppercase();
-            let Some(rest) = ku.strip_prefix("POWER") else { continue };
+            let Some(rest) = ku.strip_prefix("POWER") else {
+                continue;
+            };
             let idx = if rest.is_empty() {
                 0
             } else if let Ok(n) = rest.parse::<usize>() {
@@ -284,7 +302,11 @@ impl Device {
     fn parse_state(&mut self, v: &Value) {
         if let Some(s) = v.get("UptimeSec").and_then(Value::as_u64) {
             self.uptime = Some((s, Instant::now()));
-        } else if let Some(s) = v.get("Uptime").and_then(Value::as_str).and_then(parse_duration) {
+        } else if let Some(s) = v
+            .get("Uptime")
+            .and_then(Value::as_str)
+            .and_then(parse_duration)
+        {
             self.uptime = Some((s, Instant::now()));
         }
         set_i64(&mut self.load_avg, v, "LoadAvg");
@@ -319,7 +341,11 @@ impl Device {
             set_str(&mut self.restart_reason, s, "RestartReason");
             set_i64(&mut self.boot_count, s, "BootCount");
             set_i64(&mut self.sleep, s, "Sleep");
-            if let Some(u) = s.get("Uptime").and_then(Value::as_str).and_then(parse_duration) {
+            if let Some(u) = s
+                .get("Uptime")
+                .and_then(Value::as_str)
+                .and_then(parse_duration)
+            {
                 self.uptime = Some((u, Instant::now()));
             }
         }
@@ -389,7 +415,11 @@ impl Device {
                 *slot = Some(s.to_string());
             }
         }
-        if let Some(gt) = v.get("GroupTopic1").or(v.get("GroupTopic")).and_then(Value::as_str) {
+        if let Some(gt) = v
+            .get("GroupTopic1")
+            .or(v.get("GroupTopic"))
+            .and_then(Value::as_str)
+        {
             self.group_topic = Some(gt.to_string());
         }
         if let Some(msg) = v.get("Upgrade").and_then(Value::as_str) {
@@ -417,12 +447,21 @@ impl Device {
             UpgradePhase::Restarting | UpgradePhase::Progress(_) | UpgradePhase::Sent
                 if lower.contains("safeboot") || lower.contains("minimal") =>
             {
-                let what = if lower.contains("safeboot") { "Safeboot" } else { "Minimal firmware" };
-                u.phase = UpgradePhase::Progress(format!("{what} running, writing the new firmware…"));
+                let what = if lower.contains("safeboot") {
+                    "Safeboot"
+                } else {
+                    "Minimal firmware"
+                };
+                u.phase =
+                    UpgradePhase::Progress(format!("{what} running, writing the new firmware…"));
             }
             UpgradePhase::Restarting => {
                 u.phase = if changed {
-                    UpgradePhase::Done(format!("{} → {}", short_version(&from), short_version(&version)))
+                    UpgradePhase::Done(format!(
+                        "{} → {}",
+                        short_version(&from),
+                        short_version(&version)
+                    ))
                 } else {
                     UpgradePhase::Done(format!("Restarted, still {}", short_version(&version)))
                 };
@@ -430,8 +469,11 @@ impl Device {
             // Finished or failed earlier, but the device now runs another version: it did
             // upgrade after all (slow restart, or upgraded from another app).
             UpgradePhase::Done(_) | UpgradePhase::Failed(_) | UpgradePhase::Note(_) if changed => {
-                u.phase =
-                    UpgradePhase::Done(format!("{} → {}", short_version(&from), short_version(&version)));
+                u.phase = UpgradePhase::Done(format!(
+                    "{} → {}",
+                    short_version(&from),
+                    short_version(&version)
+                ));
             }
             _ => {}
         }
@@ -467,11 +509,17 @@ impl Store {
 
         let mut hit: Option<(String, bool, String)> = None;
         for (key, d) in &self.devices {
-            if let Some(s) = topic.strip_prefix(d.tele_prefix.as_str()).filter(|s| !s.contains('/')) {
+            if let Some(s) = topic
+                .strip_prefix(d.tele_prefix.as_str())
+                .filter(|s| !s.contains('/'))
+            {
                 hit = Some((key.clone(), true, s.to_string()));
                 break;
             }
-            if let Some(s) = topic.strip_prefix(d.stat_prefix.as_str()).filter(|s| !s.contains('/')) {
+            if let Some(s) = topic
+                .strip_prefix(d.stat_prefix.as_str())
+                .filter(|s| !s.contains('/'))
+            {
                 hit = Some((key.clone(), false, s.to_string()));
                 break;
             }
@@ -480,19 +528,31 @@ impl Store {
         // Fallback discovery from LWT for devices without native discovery.
         if hit.is_none() {
             let parts: Vec<&str> = topic.split('/').collect();
-            let lwt = payload.eq_ignore_ascii_case("online") || payload.eq_ignore_ascii_case("offline");
-            if parts.len() == 3 && parts[0] == "tele" && parts[2] == "LWT" && lwt && !parts[1].is_empty() {
+            let lwt =
+                payload.eq_ignore_ascii_case("online") || payload.eq_ignore_ascii_case("offline");
+            if parts.len() == 3
+                && parts[0] == "tele"
+                && parts[2] == "LWT"
+                && lwt
+                && !parts[1].is_empty()
+            {
                 let d = Device::new(parts[1], DEFAULT_FULLTOPIC, default_prefixes());
                 self.devices.insert(parts[1].to_string(), d);
                 hit = Some((parts[1].to_string(), true, "LWT".into()));
             }
         }
 
-        let Some((key, is_tele, suffix)) = hit else { return out };
+        let Some((key, is_tele, suffix)) = hit else {
+            return out;
+        };
         let suffix = suffix.to_ascii_uppercase();
-        let json: Option<Value> = serde_json::from_str::<Value>(payload).ok().filter(Value::is_object);
+        let json: Option<Value> = serde_json::from_str::<Value>(payload)
+            .ok()
+            .filter(Value::is_object);
 
-        let Some(d) = self.devices.get_mut(&key) else { return out };
+        let Some(d) = self.devices.get_mut(&key) else {
+            return out;
+        };
         let is_lwt = is_tele && suffix == "LWT";
         if !is_lwt && !retained {
             d.answered = true;
@@ -534,7 +594,9 @@ impl Store {
 
     /// Asks for the full status once per LWT, unless the device is reported offline.
     fn query_if_needed(&mut self, key: &str, out: &mut Vec<Action>) {
-        let Some(d) = self.devices.get_mut(key) else { return };
+        let Some(d) = self.devices.get_mut(key) else {
+            return;
+        };
         if d.online == Some(false) || d.queried {
             return;
         }
@@ -546,9 +608,18 @@ impl Store {
     }
 
     fn handle_discovery(&mut self, payload: &str, out: &mut Vec<Action>) -> Option<String> {
-        let Ok(v) = serde_json::from_str::<Value>(payload) else { return None };
-        let t = v.get("t").and_then(Value::as_str).filter(|t| !t.is_empty())?;
-        let ft = v.get("ft").and_then(Value::as_str).unwrap_or(DEFAULT_FULLTOPIC).to_string();
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            return None;
+        };
+        let t = v
+            .get("t")
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())?;
+        let ft = v
+            .get("ft")
+            .and_then(Value::as_str)
+            .unwrap_or(DEFAULT_FULLTOPIC)
+            .to_string();
         let mut tp = default_prefixes();
         if let Some(a) = v.get("tp").and_then(Value::as_array) {
             for (i, p) in a.iter().take(3).enumerate() {
@@ -565,7 +636,11 @@ impl Store {
         d.full_topic = ft.clone();
         d.prefixes = tp.clone();
         set_str(&mut d.device_name, &v, "dn");
-        if let Some(f) = v.get("fn").and_then(Value::as_array).and_then(|a| a.iter().find_map(Value::as_str)) {
+        if let Some(f) = v
+            .get("fn")
+            .and_then(Value::as_array)
+            .and_then(|a| a.iter().find_map(Value::as_str))
+        {
             d.friendly_name = Some(f.to_string());
         }
         set_str(&mut d.hostname, &v, "hn");
@@ -595,9 +670,14 @@ impl Store {
     }
 
     fn query(&self, key: &str, out: &mut Vec<Action>) {
-        let Some(d) = self.devices.get(key) else { return };
+        let Some(d) = self.devices.get(key) else {
+            return;
+        };
         let mut send = |cmd: &str, payload: &str| {
-            out.push(Action::Publish { topic: d.cmnd(cmd), payload: payload.into() })
+            out.push(Action::Publish {
+                topic: d.cmnd(cmd),
+                payload: payload.into(),
+            })
         };
         send("STATUS", "0");
         send("MODULE", "");
@@ -613,8 +693,12 @@ impl Store {
     /// did not answer: they get another `NO_ANSWER_AFTER` to do it).
     pub fn refresh_all(&mut self) -> Vec<Action> {
         let mut out = Vec::new();
-        let keys: Vec<String> =
-            self.devices.iter().filter(|(_, d)| d.online != Some(false)).map(|(k, _)| k.clone()).collect();
+        let keys: Vec<String> = self
+            .devices
+            .iter()
+            .filter(|(_, d)| d.online != Some(false))
+            .map(|(k, _)| k.clone())
+            .collect();
         for k in keys {
             if let Some(d) = self.devices.get_mut(&k).filter(|d| !d.answered) {
                 d.asked = Some(Instant::now());
@@ -630,7 +714,10 @@ impl Store {
         self.devices
             .get(key)
             .filter(|d| d.is_online())
-            .map(|d| Action::Publish { topic: d.cmnd(cmd), payload: payload.into() })
+            .map(|d| Action::Publish {
+                topic: d.cmnd(cmd),
+                payload: payload.into(),
+            })
     }
 
     pub fn start_upgrade(&mut self, key: &str) -> Option<Action> {
@@ -640,7 +727,10 @@ impl Store {
             from: d.version.clone(),
             phase: UpgradePhase::Sent,
         });
-        Some(Action::Publish { topic: d.cmnd("UPGRADE"), payload: "1".into() })
+        Some(Action::Publish {
+            topic: d.cmnd("UPGRADE"),
+            payload: "1".into(),
+        })
     }
 
     pub fn check_timeouts(&mut self) {
@@ -684,7 +774,11 @@ fn fmt_value(v: &Value) -> String {
 }
 
 fn format_mac(m: &str) -> String {
-    let hex: String = m.chars().filter(|c| c.is_ascii_hexdigit()).collect::<String>().to_ascii_uppercase();
+    let hex: String = m
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect::<String>()
+        .to_ascii_uppercase();
     if hex.len() != 12 {
         return m.to_string();
     }
@@ -713,7 +807,11 @@ pub fn format_duration(secs: u64) -> String {
     let h = (secs % 86400) / 3600;
     let m = (secs % 3600) / 60;
     let s = secs % 60;
-    if d > 0 { format!("{d}d {h:02}:{m:02}:{s:02}") } else { format!("{h:02}:{m:02}:{s:02}") }
+    if d > 0 {
+        format!("{d}d {h:02}:{m:02}:{s:02}")
+    } else {
+        format!("{h:02}:{m:02}:{s:02}")
+    }
 }
 
 /// "16.0.0(release-tasmota)" -> "16.0.0"
@@ -733,14 +831,20 @@ mod tests {
 
     #[test]
     fn durations() {
-        assert_eq!(parse_duration("1T08:43:46"), Some(86400 + 8 * 3600 + 43 * 60 + 46));
+        assert_eq!(
+            parse_duration("1T08:43:46"),
+            Some(86400 + 8 * 3600 + 43 * 60 + 46)
+        );
         assert_eq!(parse_duration("0T00:00:05"), Some(5));
         assert_eq!(format_duration(86400 + 5), "1d 00:00:05");
     }
 
     #[test]
     fn versions() {
-        assert_eq!(parse_version("16.0.0(release-tasmota)"), Some(vec![16, 0, 0]));
+        assert_eq!(
+            parse_version("16.0.0(release-tasmota)"),
+            Some(vec![16, 0, 0])
+        );
         assert_eq!(parse_version("v15.2.1"), Some(vec![15, 2, 1]));
         assert!(parse_version("8.5.1") < parse_version("16.0.0"));
     }
@@ -749,7 +853,9 @@ mod tests {
     fn lwt_then_state() {
         let mut s = Store::default();
         let out = s.handle("tele/credenza/LWT", "Online");
-        assert!(out.iter().any(|a| matches!(a, Action::Publish { topic, .. } if topic == "cmnd/credenza/STATUS")));
+        assert!(out.iter().any(
+            |a| matches!(a, Action::Publish { topic, .. } if topic == "cmnd/credenza/STATUS")
+        ));
         s.handle(
             "tele/credenza/STATE",
             r#"{"UptimeSec":100,"POWER1":"ON","POWER2":"OFF","Wifi":{"AP":1,"RSSI":96,"LinkCount":4}}"#,
@@ -766,7 +872,8 @@ mod tests {
     }
 
     fn sent(out: &[Action], cmd: &str) -> bool {
-        out.iter().any(|a| matches!(a, Action::Publish { topic, .. } if topic.ends_with(cmd)))
+        out.iter()
+            .any(|a| matches!(a, Action::Publish { topic, .. } if topic.ends_with(cmd)))
     }
 
     fn long_ago(d: Duration) -> Instant {
@@ -777,7 +884,10 @@ mod tests {
     fn stale_retained_online_is_not_online() {
         let mut s = Store::default();
         // Unplugged for days: the broker still has "Online" and a retained POWER.
-        assert!(sent(&s.handle_message("tele/plug/LWT", "Online", true), "/STATUS"));
+        assert!(sent(
+            &s.handle_message("tele/plug/LWT", "Online", true),
+            "/STATUS"
+        ));
         s.handle_message("stat/plug/POWER", "ON", true);
         let d = &s.devices["plug"];
         assert!(!d.is_online());
@@ -807,13 +917,20 @@ mod tests {
         // No Offline in between (a stale "Online" before): still a new full status query.
         let out = s.handle("tele/plug/LWT", "Online");
         assert!(sent(&out, "/STATUS"));
-        assert!(!s.devices["plug"].is_online(), "online again only after it answers");
+        assert!(
+            !s.devices["plug"].is_online(),
+            "online again only after it answers"
+        );
     }
 
     #[test]
     fn discovery_without_lwt_is_asked() {
         let mut s = Store::default();
-        let out = s.handle_message("tasmota/discovery/AABB/config", r#"{"t":"lamp","sw":"15.0.1"}"#, true);
+        let out = s.handle_message(
+            "tasmota/discovery/AABB/config",
+            r#"{"t":"lamp","sw":"15.0.1"}"#,
+            true,
+        );
         assert!(sent(&out, "/STATUS"));
         assert_eq!(s.devices["lamp"].reachable(), None);
     }
@@ -833,7 +950,11 @@ mod tests {
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("16.0.0(tasmota32)"));
         let u = s.devices["a8t"].upgrade.as_ref().unwrap();
-        assert!(matches!(&u.phase, UpgradePhase::Done(m) if m == "13.3.0 → 16.0.0"), "{:?}", u.phase);
+        assert!(
+            matches!(&u.phase, UpgradePhase::Done(m) if m == "13.3.0 → 16.0.0"),
+            "{:?}",
+            u.phase
+        );
     }
 
     #[test]
@@ -846,7 +967,11 @@ mod tests {
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("16.0.0(release-tasmota32)"));
         let u = s.devices["a8t"].upgrade.as_ref().unwrap();
-        assert!(matches!(&u.phase, UpgradePhase::Done(m) if m == "Restarted, still 16.0.0"), "{:?}", u.phase);
+        assert!(
+            matches!(&u.phase, UpgradePhase::Done(m) if m == "Restarted, still 16.0.0"),
+            "{:?}",
+            u.phase
+        );
     }
 
     #[test]
@@ -855,18 +980,34 @@ mod tests {
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("13.3.0(tasmota32)"));
         s.start_upgrade("a8t");
-        s.devices.get_mut("a8t").unwrap().upgrade.as_mut().unwrap().started = long_ago(UPGRADE_TIMEOUT * 2);
+        s.devices
+            .get_mut("a8t")
+            .unwrap()
+            .upgrade
+            .as_mut()
+            .unwrap()
+            .started = long_ago(UPGRADE_TIMEOUT * 2);
         s.check_timeouts();
-        assert!(matches!(s.devices["a8t"].upgrade.as_ref().unwrap().phase, UpgradePhase::Failed(_)));
+        assert!(matches!(
+            s.devices["a8t"].upgrade.as_ref().unwrap().phase,
+            UpgradePhase::Failed(_)
+        ));
         // Comes back: the alarm becomes a note.
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("13.3.0(tasmota32)"));
-        assert!(matches!(s.devices["a8t"].upgrade.as_ref().unwrap().phase, UpgradePhase::Note(_)));
+        assert!(matches!(
+            s.devices["a8t"].upgrade.as_ref().unwrap().phase,
+            UpgradePhase::Note(_)
+        ));
         // Upgraded later (another app): shown as done.
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("16.0.0(tasmota32)"));
         let u = s.devices["a8t"].upgrade.as_ref().unwrap();
-        assert!(matches!(&u.phase, UpgradePhase::Done(m) if m == "13.3.0 → 16.0.0"), "{:?}", u.phase);
+        assert!(
+            matches!(&u.phase, UpgradePhase::Done(m) if m == "13.3.0 → 16.0.0"),
+            "{:?}",
+            u.phase
+        );
     }
 
     #[test]
@@ -874,7 +1015,9 @@ mod tests {
         let mut d = Device::new("x", DEFAULT_FULLTOPIC, default_prefixes());
         d.sensor = serde_json::from_str(r#"{"ENERGY":{"Total":12.3,"Power":45}}"#).ok();
         assert_eq!(d.telemetry().as_deref(), Some("45 W"));
-        d.sensor = serde_json::from_str(r#"{"AM2301":{"Temperature":21.5,"Humidity":40},"TempUnit":"C"}"#).ok();
+        d.sensor =
+            serde_json::from_str(r#"{"AM2301":{"Temperature":21.5,"Humidity":40},"TempUnit":"C"}"#)
+                .ok();
         assert_eq!(d.telemetry().as_deref(), Some("21.5 °C  40 %"));
     }
 }

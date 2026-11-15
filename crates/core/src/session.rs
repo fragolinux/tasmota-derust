@@ -13,11 +13,11 @@ use crossbeam_channel::RecvTimeoutError;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::Notify;
 use crate::config::BrokerConfig;
 use crate::device::{self, Action, Device, Store, UpgradePhase};
 use crate::github::{self, Latest};
 use crate::mqtt::{Mqtt, MqttEvent};
-use crate::Notify;
 
 struct Shared {
     store: Store,
@@ -83,40 +83,44 @@ impl Session {
             let mqtt = Arc::downgrade(&mqtt);
             std::thread::Builder::new()
                 .name("session".into())
-                .spawn(move || loop {
-                    match rx.recv_timeout(Duration::from_secs(1)) {
-                        Ok(ev) => {
-                            let actions = {
-                                let mut s = shared.lock().unwrap();
-                                match ev {
-                                    MqttEvent::Connected => {
-                                        s.connected = true;
-                                        s.status = "Connected".into();
-                                        Vec::new()
+                .spawn(move || {
+                    loop {
+                        match rx.recv_timeout(Duration::from_secs(1)) {
+                            Ok(ev) => {
+                                let actions = {
+                                    let mut s = shared.lock().unwrap();
+                                    match ev {
+                                        MqttEvent::Connected => {
+                                            s.connected = true;
+                                            s.status = "Connected".into();
+                                            Vec::new()
+                                        }
+                                        MqttEvent::Disconnected(e) => {
+                                            s.connected = false;
+                                            s.status = e;
+                                            Vec::new()
+                                        }
+                                        MqttEvent::Message {
+                                            topic,
+                                            payload,
+                                            retained,
+                                        } => s.store.handle_message(&topic, &payload, retained),
                                     }
-                                    MqttEvent::Disconnected(e) => {
-                                        s.connected = false;
-                                        s.status = e;
-                                        Vec::new()
-                                    }
-                                    MqttEvent::Message { topic, payload, retained } => {
-                                        s.store.handle_message(&topic, &payload, retained)
-                                    }
+                                };
+                                match mqtt.upgrade() {
+                                    Some(m) => run_actions(&m, actions),
+                                    None => break,
                                 }
-                            };
-                            match mqtt.upgrade() {
-                                Some(m) => run_actions(&m, actions),
-                                None => break,
                             }
-                        }
-                        Err(RecvTimeoutError::Timeout) => {
-                            if mqtt.strong_count() == 0 {
-                                break;
+                            Err(RecvTimeoutError::Timeout) => {
+                                if mqtt.strong_count() == 0 {
+                                    break;
+                                }
                             }
+                            Err(RecvTimeoutError::Disconnected) => break,
                         }
-                        Err(RecvTimeoutError::Disconnected) => break,
+                        shared.lock().unwrap().store.check_timeouts();
                     }
-                    shared.lock().unwrap().store.check_timeouts();
                 })
                 .expect("spawn session thread");
         }
@@ -158,7 +162,12 @@ impl Session {
             latest,
             latest_error,
             ssids: s.store.ssids.clone(),
-            devices: s.store.devices.values().map(|d| DeviceInfo::new(d, latest_v.as_ref())).collect(),
+            devices: s
+                .store
+                .devices
+                .values()
+                .map(|d| DeviceInfo::new(d, latest_v.as_ref()))
+                .collect(),
         }
     }
 
@@ -186,7 +195,12 @@ impl Session {
         let action = {
             let s = self.shared.lock().unwrap();
             self.guard(&s, topic)?;
-            let relays = s.store.devices.get(topic).map(|d| d.power.len()).unwrap_or(0);
+            let relays = s
+                .store
+                .devices
+                .get(topic)
+                .map(|d| d.power.len())
+                .unwrap_or(0);
             if n == 0 || n > relays {
                 return Err(CommandError::NoSuchRelay);
             }
@@ -215,7 +229,12 @@ impl Session {
         let action = {
             let mut s = self.shared.lock().unwrap();
             self.guard(&s, topic)?;
-            if s.store.devices.get(topic).and_then(|d| d.upgrade.as_ref()).is_some_and(|u| u.is_active()) {
+            if s.store
+                .devices
+                .get(topic)
+                .and_then(|d| d.upgrade.as_ref())
+                .is_some_and(|u| u.is_active())
+            {
                 return Err(CommandError::UpgradeRunning);
             }
             s.store.start_upgrade(topic)
@@ -325,7 +344,10 @@ impl DeviceInfo {
             gateway: d.gateway.clone(),
             mac: d.mac.clone(),
             version: d.version.clone(),
-            version_short: d.version.as_deref().map(|v| device::short_version(v).to_string()),
+            version_short: d
+                .version
+                .as_deref()
+                .map(|v| device::short_version(v).to_string()),
             outdated,
             core: d.core.as_deref().map(|c| c.replace('_', ".")),
             sdk: d.sdk.clone(),

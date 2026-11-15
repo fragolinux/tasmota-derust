@@ -47,41 +47,177 @@ const SSIDS: [&str; 2] = ["Home-Main", "Home-Extender"];
 
 #[allow(clippy::type_complexity)]
 fn devices() -> Vec<Fake> {
-    let list: &[(&str, &str, &str, usize, i64, i64, &str, bool, &str, u64, bool)] = &[
-        ("cucina", "Kitchen light", "Sonoff Basic", 1, 96, 1, "16.0.0", true, "Power On", 1_123_456, false),
-        ("salotto", "Living room", "Sonoff Dual R2", 2, 78, 1, "16.0.0", true, "Software/System restart", 86_400 * 3, false),
-        ("camera", "Bedroom lamp", "Sonoff Mini", 1, 64, 2, "15.2.0", true, "Software/System restart", 5_400, false),
-        ("lavatrice", "Washing machine", "Gosund SP111", 1, 88, 1, "16.0.0", true, "Power On", 86_400 * 24, true),
-        ("garage", "Garage door", "Generic", 1, 41, 2, "16.0.0", true, "External System", 3_600 * 7, false),
-        ("giardino", "Garden lights", "Sonoff 4CH", 4, 55, 2, "8.5.1", true, "Hardware Watchdog", 600, false),
-        ("termostato", "Thermostat", "ESP32-DevKit", 1, 100, 1, "16.0.0", true, "Power On", 86_400 * 41, true),
-        ("vecchia_presa", "Old plug", "Sonoff S20", 1, 0, 1, "6.7.1", false, "Power On", 0, false),
-        ("presa_esp32", "ESP32 plug", "NOUS A8T", 1, 70, 1, "13.3.0", true, "Power On", 7_200, false),
-        ("staccata", "Unplugged plug", "NOUS A8T", 1, 0, 1, "13.3.0", false, "Power On", 0, false),
+    let list: &[(
+        &str,
+        &str,
+        &str,
+        usize,
+        i64,
+        i64,
+        &str,
+        bool,
+        &str,
+        u64,
+        bool,
+    )] = &[
+        (
+            "cucina",
+            "Kitchen light",
+            "Sonoff Basic",
+            1,
+            96,
+            1,
+            "16.0.0",
+            true,
+            "Power On",
+            1_123_456,
+            false,
+        ),
+        (
+            "salotto",
+            "Living room",
+            "Sonoff Dual R2",
+            2,
+            78,
+            1,
+            "16.0.0",
+            true,
+            "Software/System restart",
+            86_400 * 3,
+            false,
+        ),
+        (
+            "camera",
+            "Bedroom lamp",
+            "Sonoff Mini",
+            1,
+            64,
+            2,
+            "15.2.0",
+            true,
+            "Software/System restart",
+            5_400,
+            false,
+        ),
+        (
+            "lavatrice",
+            "Washing machine",
+            "Gosund SP111",
+            1,
+            88,
+            1,
+            "16.0.0",
+            true,
+            "Power On",
+            86_400 * 24,
+            true,
+        ),
+        (
+            "garage",
+            "Garage door",
+            "Generic",
+            1,
+            41,
+            2,
+            "16.0.0",
+            true,
+            "External System",
+            3_600 * 7,
+            false,
+        ),
+        (
+            "giardino",
+            "Garden lights",
+            "Sonoff 4CH",
+            4,
+            55,
+            2,
+            "8.5.1",
+            true,
+            "Hardware Watchdog",
+            600,
+            false,
+        ),
+        (
+            "termostato",
+            "Thermostat",
+            "ESP32-DevKit",
+            1,
+            100,
+            1,
+            "16.0.0",
+            true,
+            "Power On",
+            86_400 * 41,
+            true,
+        ),
+        (
+            "vecchia_presa",
+            "Old plug",
+            "Sonoff S20",
+            1,
+            0,
+            1,
+            "6.7.1",
+            false,
+            "Power On",
+            0,
+            false,
+        ),
+        (
+            "presa_esp32",
+            "ESP32 plug",
+            "NOUS A8T",
+            1,
+            70,
+            1,
+            "13.3.0",
+            true,
+            "Power On",
+            7_200,
+            false,
+        ),
+        (
+            "staccata",
+            "Unplugged plug",
+            "NOUS A8T",
+            1,
+            0,
+            1,
+            "13.3.0",
+            false,
+            "Power On",
+            0,
+            false,
+        ),
     ];
     list.iter()
         .enumerate()
-        .map(|(i, &(topic, name, module, relays, rssi, ap, version, online, reason, up, sensor))| Fake {
-            topic,
-            name,
-            module,
-            relays,
-            power: (0..relays).map(|k| (i + k) % 3 == 0).collect(),
-            rssi,
-            ap,
-            version: version.to_string(),
-            online,
-            boot_count: 3 + i as i64 * 17,
-            restart_reason: reason,
-            started: Instant::now(),
-            uptime_base: up,
-            ip: format!("10.99.0.{}", 20 + i),
-            mac: format!("AA:BB:CC:00:00:{:02X}", 0x10 + i),
-            sensor,
-            esp32: topic == "presa_esp32" || topic == "staccata",
-            safeboot: false,
-            stale_lwt: topic == "staccata",
-        })
+        .map(
+            |(i, &(topic, name, module, relays, rssi, ap, version, online, reason, up, sensor))| {
+                Fake {
+                    topic,
+                    name,
+                    module,
+                    relays,
+                    power: (0..relays).map(|k| (i + k) % 3 == 0).collect(),
+                    rssi,
+                    ap,
+                    version: version.to_string(),
+                    online,
+                    boot_count: 3 + i as i64 * 17,
+                    restart_reason: reason,
+                    started: Instant::now(),
+                    uptime_base: up,
+                    ip: format!("10.99.0.{}", 20 + i),
+                    mac: format!("AA:BB:CC:00:00:{:02X}", 0x10 + i),
+                    sensor,
+                    esp32: topic == "presa_esp32" || topic == "staccata",
+                    safeboot: false,
+                    stale_lwt: topic == "staccata",
+                }
+            },
+        )
         .collect()
 }
 
@@ -91,11 +227,21 @@ impl Fake {
     }
 
     fn tasmota_duration(s: u64) -> String {
-        format!("{}T{:02}:{:02}:{:02}", s / 86400, s % 86400 / 3600, s % 3600 / 60, s % 60)
+        format!(
+            "{}T{:02}:{:02}:{:02}",
+            s / 86400,
+            s % 86400 / 3600,
+            s % 3600 / 60,
+            s % 60
+        )
     }
 
     fn power_key(&self, i: usize) -> String {
-        if self.relays == 1 { "POWER".into() } else { format!("POWER{}", i + 1) }
+        if self.relays == 1 {
+            "POWER".into()
+        } else {
+            format!("POWER{}", i + 1)
+        }
     }
 
     fn wifi(&self) -> Value {
@@ -145,7 +291,13 @@ impl Fake {
     }
 
     fn full_version(&self) -> String {
-        let build = if self.safeboot { "safeboot" } else if self.esp32 { "tasmota32" } else { "release-tasmota" };
+        let build = if self.safeboot {
+            "safeboot"
+        } else if self.esp32 {
+            "tasmota32"
+        } else {
+            "release-tasmota"
+        };
         format!("{}({build})", self.version)
     }
 
@@ -160,21 +312,28 @@ impl Fake {
 }
 
 fn require_local(addr: &str) -> (String, u16) {
-    let (host, port) = addr.rsplit_once(':').map(|(h, p)| (h, p.parse().unwrap_or(1883))).unwrap_or((addr, 1883));
+    let (host, port) = addr
+        .rsplit_once(':')
+        .map(|(h, p)| (h, p.parse().unwrap_or(1883)))
+        .unwrap_or((addr, 1883));
     let host = host.trim_matches(['[', ']']).to_string();
     let ok = (host.as_str(), port)
         .to_socket_addrs()
         .map(|mut it| it.all(|a| a.ip().is_loopback()))
         .unwrap_or(false);
     if !ok {
-        eprintln!("Refusing {addr}: the simulator only talks to a broker on this machine (127.0.0.1 / ::1).");
+        eprintln!(
+            "Refusing {addr}: the simulator only talks to a broker on this machine (127.0.0.1 / ::1)."
+        );
         std::process::exit(2);
     }
     (host, port)
 }
 
 fn main() {
-    let arg = std::env::args().nth(1).unwrap_or_else(|| "127.0.0.1:1883".into());
+    let arg = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "127.0.0.1:1883".into());
     let (host, port) = require_local(&arg);
 
     let mut opts = MqttOptions::new("tasmota-derust-simulator", host.clone(), port);
@@ -190,28 +349,57 @@ fn main() {
     {
         let client = client.clone();
         let fakes = fakes.clone();
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(15));
-            for f in fakes.lock().unwrap().iter().filter(|f| f.online) {
-                publish(&client, format!("tele/{}/STATE", f.topic), f.state().to_string(), false);
-                if let Some(s) = f.sensor_msg() {
-                    publish(&client, format!("tele/{}/SENSOR", f.topic), s.to_string(), false);
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_secs(15));
+                for f in fakes.lock().unwrap().iter().filter(|f| f.online) {
+                    publish(
+                        &client,
+                        format!("tele/{}/STATE", f.topic),
+                        f.state().to_string(),
+                        false,
+                    );
+                    if let Some(s) = f.sensor_msg() {
+                        publish(
+                            &client,
+                            format!("tele/{}/SENSOR", f.topic),
+                            s.to_string(),
+                            false,
+                        );
+                    }
                 }
             }
         });
     }
 
-    println!("Simulating {} devices on {host}:{port}", fakes.lock().unwrap().len());
+    println!(
+        "Simulating {} devices on {host}:{port}",
+        fakes.lock().unwrap().len()
+    );
     for ev in connection.iter() {
         match ev {
             Ok(Event::Incoming(Packet::ConnAck(_))) => {
                 let _ = client.try_subscribe("cmnd/+/+", QoS::AtMostOnce);
                 for f in fakes.lock().unwrap().iter() {
-                    publish(&client, format!("tasmota/discovery/{}/config", f.mac.replace(':', "")), f.discovery().to_string(), true);
-                    let lwt = if f.online || f.stale_lwt { "Online" } else { "Offline" };
+                    publish(
+                        &client,
+                        format!("tasmota/discovery/{}/config", f.mac.replace(':', "")),
+                        f.discovery().to_string(),
+                        true,
+                    );
+                    let lwt = if f.online || f.stale_lwt {
+                        "Online"
+                    } else {
+                        "Offline"
+                    };
                     publish(&client, format!("tele/{}/LWT", f.topic), lwt.into(), true);
                     if f.online {
-                        publish(&client, format!("tele/{}/STATE", f.topic), f.state().to_string(), false);
+                        publish(
+                            &client,
+                            format!("tele/{}/STATE", f.topic),
+                            f.state().to_string(),
+                            false,
+                        );
                     }
                 }
             }
@@ -239,14 +427,23 @@ fn handle(client: &Client, fakes: &Arc<Mutex<Vec<Fake>>>, topic: &str, cmd: &str
         let _ = client.try_publish(t, QoS::AtMostOnce, false, p.into_bytes());
     };
     let mut all = fakes.lock().unwrap();
-    let Some(f) = all.iter_mut().find(|f| f.topic == topic && f.online) else { return };
+    let Some(f) = all.iter_mut().find(|f| f.topic == topic && f.online) else {
+        return;
+    };
     let stat = |s: &str| format!("stat/{topic}/{s}");
 
     match cmd {
         "STATUS" if payload == "0" => send(stat("STATUS0"), f.status0().to_string()),
-        "MODULE" if payload.is_empty() => send(stat("RESULT"), json!({ "Module": { "1": f.module } }).to_string()),
-        "SSID1" if payload.is_empty() => send(stat("RESULT"), json!({ "SSId1": SSIDS[0] }).to_string()),
-        "SSID2" if payload.is_empty() => send(stat("RESULT"), json!({ "SSId2": SSIDS[1] }).to_string()),
+        "MODULE" if payload.is_empty() => send(
+            stat("RESULT"),
+            json!({ "Module": { "1": f.module } }).to_string(),
+        ),
+        "SSID1" if payload.is_empty() => {
+            send(stat("RESULT"), json!({ "SSId1": SSIDS[0] }).to_string())
+        }
+        "SSID2" if payload.is_empty() => {
+            send(stat("RESULT"), json!({ "SSId2": SSIDS[1] }).to_string())
+        }
         c if c.starts_with("POWER") => {
             let n = c[5..].parse::<usize>().unwrap_or(1);
             if n == 0 || n > f.relays {
@@ -284,14 +481,24 @@ fn handle(client: &Client, fakes: &Arc<Mutex<Vec<Fake>>>, topic: &str, cmd: &str
         }
         "UPGRADE" if payload == "1" => {
             send(stat("UPGRADE"), json!({ "Upgrade": "Version 16.0.0 from http://ota.tasmota.com/tasmota/release/tasmota.bin.gz" }).to_string());
-            restart(client.clone(), fakes.clone(), topic.to_string(), Some("16.0.0"));
+            restart(
+                client.clone(),
+                fakes.clone(),
+                topic.to_string(),
+                Some("16.0.0"),
+            );
         }
         _ => {}
     }
 }
 
 /// Goes offline for a few seconds, then comes back like a restarted Tasmota.
-fn restart(client: Client, fakes: Arc<Mutex<Vec<Fake>>>, topic: String, new_version: Option<&'static str>) {
+fn restart(
+    client: Client,
+    fakes: Arc<Mutex<Vec<Fake>>>,
+    topic: String,
+    new_version: Option<&'static str>,
+) {
     thread::spawn(move || {
         restart_now(&client, &fakes, &topic, |f| {
             if let Some(v) = new_version {
@@ -302,7 +509,12 @@ fn restart(client: Client, fakes: Arc<Mutex<Vec<Fake>>>, topic: String, new_vers
 }
 
 /// Restart on the calling thread: offline, `change` applied, online again.
-fn restart_now(client: &Client, fakes: &Mutex<Vec<Fake>>, topic: &str, change: impl FnOnce(&mut Fake)) {
+fn restart_now(
+    client: &Client,
+    fakes: &Mutex<Vec<Fake>>,
+    topic: &str,
+    change: impl FnOnce(&mut Fake),
+) {
     let pub_ = |t: String, p: String, r: bool| {
         let _ = client.try_publish(t, QoS::AtMostOnce, r, p.into_bytes());
     };
@@ -310,7 +522,9 @@ fn restart_now(client: &Client, fakes: &Mutex<Vec<Fake>>, topic: &str, change: i
     pub_(format!("tele/{topic}/LWT"), "Offline".into(), true);
     thread::sleep(Duration::from_secs(5));
     let mut all = fakes.lock().unwrap();
-    let Some(f) = all.iter_mut().find(|f| f.topic == topic) else { return };
+    let Some(f) = all.iter_mut().find(|f| f.topic == topic) else {
+        return;
+    };
     change(f);
     f.started = Instant::now();
     f.uptime_base = 0;

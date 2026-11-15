@@ -77,10 +77,12 @@ async fn main() {
 
     let session = Arc::new(Session::start(&cfg.broker, opts.read_only, Arc::new(|| {})));
 
-    let listener = tokio::net::TcpListener::bind(opts.listen).await.unwrap_or_else(|e| {
-        eprintln!("Cannot listen on {}: {e}", opts.listen);
-        std::process::exit(1);
-    });
+    let listener = tokio::net::TcpListener::bind(opts.listen)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("Cannot listen on {}: {e}", opts.listen);
+            std::process::exit(1);
+        });
     println!(
         "Tasmota Derust web on {}{}",
         browser_url(opts.listen),
