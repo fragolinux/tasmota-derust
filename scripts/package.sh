@@ -30,6 +30,8 @@ rm -rf "$out" "$reports"
 mkdir -p "$out" "$reports"
 out=$(cd "$out" && pwd)
 reports=$(cd "$reports" && pwd)
+# Database first, so the version info (and every report) names its date.
+trivy fs --quiet --download-db-only
 trivy version --format json > "$reports/trivy-version.json"
 dist=$(cd "$dist" && pwd)
 stage=$(mktemp -d)
