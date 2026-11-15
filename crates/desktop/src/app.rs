@@ -176,9 +176,9 @@ impl DerustApp {
                     self.push_log('!', "connection error", &e);
                     self.conn = Conn::Error(e);
                 }
-                MqttEvent::Message { topic, payload } => {
+                MqttEvent::Message { topic, payload, retained } => {
                     self.push_log('<', &topic, &payload);
-                    let actions = self.store.handle(&topic, &payload);
+                    let actions = self.store.handle_message(&topic, &payload, retained);
                     self.apply(actions);
                 }
             }
@@ -437,7 +437,7 @@ impl DerustApp {
             ui.separator();
             let total = self.store.devices.len();
             let online = self.store.devices.values().filter(|d| d.is_online()).count();
-            let offline = self.store.devices.values().filter(|d| d.online == Some(false)).count();
+            let offline = self.store.devices.values().filter(|d| d.is_offline()).count();
             ui.label(format!("{total} devices · {online} online · {offline} offline"));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.toggle_value(&mut self.log_open, "Log");
@@ -504,7 +504,7 @@ impl DerustApp {
             .store
             .devices
             .values()
-            .filter(|d| self.cfg.show_offline || d.online != Some(false))
+            .filter(|d| self.cfg.show_offline || !d.is_offline())
             .collect();
         let sort = self.sort;
         rows.sort_by(|a, b| {
@@ -545,7 +545,7 @@ impl DerustApp {
             .body(|body| {
                 body.rows(ROW_HEIGHT, rows.len(), |mut row| {
                     let d = rows[row.index()];
-                    let ci = CellCtx { dim: d.online == Some(false), ..info_ref(&info) };
+                    let ci = CellCtx { dim: d.is_offline(), ..info_ref(&info) };
                     row.col(|ui| device_cell(ui, d, actions));
                     for c in &cols {
                         row.col(|ui| cell(ui, d, *c, &ci, actions));
@@ -861,7 +861,7 @@ fn arrow_button(ui: &mut egui::Ui, up: bool, enabled: bool) -> bool {
 fn signal_icon(ui: &mut egui::Ui, d: &Device) {
     let (rect, _) = ui.allocate_exact_size(vec2(18.0, 16.0), Sense::hover());
     let p = ui.painter();
-    if d.online == Some(false) {
+    if d.is_offline() {
         let c = rect.center();
         p.circle_filled(c, 6.0, RED);
         let s = Stroke::new(1.6, Color32::WHITE);
@@ -892,8 +892,13 @@ fn signal_icon(ui: &mut egui::Ui, d: &Device) {
 fn device_cell(ui: &mut egui::Ui, d: &Device, actions: &mut Vec<UiAction>) {
     signal_icon(ui, d);
     let name = d.display_name();
-    if d.online == Some(false) {
-        ui.label(RichText::new(name).italics().weak()).on_hover_text(format!("{} is offline", d.topic));
+    if let Some(label) = d.offline_label() {
+        let why = if label == "No answer" {
+            "did not answer the status query (its LWT may be stale)"
+        } else {
+            "is offline"
+        };
+        ui.label(RichText::new(name).italics().weak()).on_hover_text(format!("{} {why}", d.topic));
     } else if let Some(url) = d.web_url() {
         let r = ui.link(name).on_hover_text(format!("Open web UI: {url}"));
         if r.clicked() {
@@ -1130,6 +1135,9 @@ fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut
                     }
                     UpgradePhase::Failed(m) => {
                         ui.colored_label(RED, m.as_str()).on_hover_text(m.as_str());
+                    }
+                    UpgradePhase::Note(m) => {
+                        ui.label(RichText::new(m.as_str()).weak()).on_hover_text(m.as_str());
                     }
                 }
             }

@@ -86,7 +86,7 @@ tbody tr.offline td:first-child { font-style: italic; }
 button.ap { cursor: pointer; }
 .ver-old { color: var(--orange); font-weight: 700; }
 .up-state { margin-left: 8px; }
-.up-done { color: var(--green); } .up-failed { color: var(--red); }
+.up-done { color: var(--green); } .up-failed { color: var(--red); } .up-note { color: var(--muted); }
 .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--muted); border-top-color: transparent;
   border-radius: 50%; animation: spin 1s linear infinite; vertical-align: -2px; margin-right: 4px; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -310,7 +310,7 @@ const narrow = window.matchMedia("(max-width: 760px)");
 const rssiColor = r => r >= 85 ? "var(--green)" : r >= 50 ? "var(--yellow)" : "var(--red)";
 
 function bars(d) {
-  if (d.online === false) return `<span class="offx" title="offline">✕</span>`;
+  if (d.online === false) return `<span class="offx" title="${d.no_answer ? "no answer" : "offline"}">✕</span>`;
   const r = d.rssi;
   const level = r == null ? 0 : r >= 75 ? 4 : r >= 50 ? 3 : r >= 25 ? 2 : 1;
   const color = r == null ? "var(--gray)" : rssiColor(r);
@@ -365,7 +365,7 @@ function updateHtml(d) {
   }
   if (d.upgrade) {
     const u = d.upgrade;
-    const cls = u.state === "done" ? "up-done" : u.state === "failed" ? "up-failed" : "";
+    const cls = u.state === "done" ? "up-done" : u.state === "failed" ? "up-failed" : u.state === "note" ? "up-note" : "";
     h += `<span class="up-state ${cls}" title="${esc(u.text)}">${busy ? '<span class="spin"></span>' : ""}${esc(u.text)}</span>`;
   }
   return h;
@@ -505,9 +505,11 @@ const ICONS = {
 const svg = p => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
 const rssiChip = d => d.rssi == null || d.online === false ? "" : `<span class="rssi" style="background:${rssiColor(d.rssi)}">${d.rssi}</span>`;
 
+const offLabel = d => d.no_answer ? "No answer" : "Offline";
+
 // What a phone row shows for each view: one muted line under the name, and a short value on the right.
 function rowParts(d) {
-  if (d.online === false) return { sub: ["Offline", d.module].filter(Boolean).join(" · "), right: "" };
+  if (d.online === false) return { sub: [offLabel(d), d.module].filter(Boolean).join(" · "), right: "" };
   const v = s => `<span class="mval">${esc(s)}</span>`;
   switch (ui.view) {
     case "health": return {
@@ -574,7 +576,7 @@ function renderSheet() {
   const two = !!data.ssids[1];
   let h = `<div class="grabber"></div>
     <div class="sheet-head">${bars(d)}<h3>${esc(d.name)}</h3><button class="btn" id="sheetClose">Done</button></div>
-    <div class="sheet-sub">${off ? "Offline" : d.online ? "Online" : "Unknown"}${d.module ? " · " + esc(d.module) : ""}</div>`;
+    <div class="sheet-sub">${off ? offLabel(d) : d.online ? "Online" : "Waiting for an answer…"}${d.module ? " · " + esc(d.module) : ""}</div>`;
   if (d.power.length) h += `<div class="card-relays">${relaysHtml(d, true)}</div>`;
   h += `<div class="sheet-actions">`;
   if (!off && d.web_url) h += `<a class="btn" href="${esc(d.web_url)}" target="_blank" rel="noopener">Open web UI</a>`;

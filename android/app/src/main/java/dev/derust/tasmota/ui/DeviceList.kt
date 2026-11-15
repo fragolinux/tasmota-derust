@@ -31,6 +31,7 @@ import dev.derust.tasmota.core.Device
 import dev.derust.tasmota.core.Snapshot
 import dev.derust.tasmota.fmtShort
 import dev.derust.tasmota.isOffline
+import dev.derust.tasmota.offlineLabel
 import dev.derust.tasmota.upgradeBusy
 import dev.derust.tasmota.ui.theme.Green
 import dev.derust.tasmota.ui.theme.Orange
@@ -101,7 +102,7 @@ private fun DeviceRow(d: Device, view: View, s: Snapshot, onOpen: () -> Unit, on
 }
 
 private fun subtitle(d: Device, view: View): String {
-    if (d.isOffline) return listOfNotNull("Offline", d.module).joinToString(" · ")
+    if (d.isOffline) return listOfNotNull(d.offlineLabel, d.module).joinToString(" · ")
     return when (view) {
         View.Home -> listOfNotNull(d.module, d.telemetry ?: d.uptime?.let { "up " + fmtShort(it) })
         View.Health -> listOfNotNull(d.restartReason, d.bootCount?.let { "$it boots" })

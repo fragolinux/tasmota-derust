@@ -10,6 +10,9 @@ use serde_json::Value;
 
 pub const DEFAULT_FULLTOPIC: &str = "%prefix%/%topic%/";
 pub const UPGRADE_TIMEOUT: Duration = Duration::from_secs(8 * 60);
+/// A device that has not answered a status query within this time counts as unreachable,
+/// whatever its (possibly stale, retained) LWT says.
+pub const NO_ANSWER_AFTER: Duration = Duration::from_secs(30);
 
 fn default_prefixes() -> [String; 3] {
     ["cmnd".into(), "stat".into(), "tele".into()]
@@ -28,6 +31,8 @@ pub enum UpgradePhase {
     Restarting,
     Done(String),
     Failed(String),
+    /// A failed upgrade, kept as a note after the device came back.
+    Note(String),
 }
 
 #[derive(Debug, Clone)]
@@ -53,8 +58,14 @@ pub struct Device {
     pub stat_prefix: String,
     pub tele_prefix: String,
 
+    /// What the LWT says (retained, so it can be stale). Use `is_online` / `reachable`.
     pub online: Option<bool>,
+    /// The full status was asked since the last LWT.
     pub queried: bool,
+    /// A live (not retained) message came from the device since the last LWT.
+    pub answered: bool,
+    /// When a status query was sent that has not been answered yet.
+    pub asked: Option<Instant>,
 
     pub device_name: Option<String>,
     pub friendly_name: Option<String>,
@@ -132,8 +143,43 @@ impl Device {
         format!("{}{}", self.cmnd_prefix, command)
     }
 
+    /// Online = not reported offline, and actually answering. A retained "Online" alone is
+    /// not enough: the broker keeps it when a device disappears without its LWT being sent.
     pub fn is_online(&self) -> bool {
-        self.online == Some(true)
+        self.online != Some(false) && self.answered
+    }
+
+    /// Asked for its status, no answer within `NO_ANSWER_AFTER`.
+    pub fn no_answer(&self) -> bool {
+        self.online != Some(false)
+            && !self.answered
+            && self.asked.is_some_and(|t| t.elapsed() > NO_ANSWER_AFTER)
+    }
+
+    /// Some(true) online, Some(false) offline or not answering, None still waiting.
+    pub fn reachable(&self) -> Option<bool> {
+        if self.is_online() {
+            Some(true)
+        } else if self.online == Some(false) || self.no_answer() {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_offline(&self) -> bool {
+        self.reachable() == Some(false)
+    }
+
+    /// "Offline", "No answer" or None.
+    pub fn offline_label(&self) -> Option<&'static str> {
+        if self.online == Some(false) {
+            Some("Offline")
+        } else if self.no_answer() {
+            Some("No answer")
+        } else {
+            None
+        }
     }
 
     pub fn display_name(&self) -> &str {
@@ -183,14 +229,19 @@ impl Device {
         if parts.is_empty() { None } else { Some(parts.join("  ")) }
     }
 
+    /// LWT received. Every LWT starts over: the device is asked for its full status again
+    /// (when it says Online) and counts as online only once it answers.
     fn set_online(&mut self, online: bool) {
         self.online = Some(online);
-        if !online {
-            self.queried = false;
-            if let Some(u) = &mut self.upgrade {
-                if u.is_active() {
-                    u.phase = UpgradePhase::Restarting;
-                }
+        self.queried = false;
+        self.answered = false;
+        self.asked = None;
+        if let Some(u) = &mut self.upgrade {
+            if !online && u.is_active() {
+                u.phase = UpgradePhase::Restarting;
+            } else if let (true, UpgradePhase::Failed(m)) = (online, &u.phase) {
+                // Back after a failed upgrade: no more alarm, the reason stays as a note.
+                u.phase = UpgradePhase::Note(format!("Last upgrade failed: {m}"));
             }
         }
     }
@@ -357,19 +408,33 @@ impl Device {
     fn check_upgrade_finished(&mut self) {
         let version = self.version.clone().unwrap_or_default();
         let Some(u) = &mut self.upgrade else { return };
-        if !matches!(u.phase, UpgradePhase::Restarting) {
-            return;
-        }
-        if version.to_ascii_lowercase().contains("minimal") {
-            u.phase = UpgradePhase::Progress("Minimal firmware running, finishing upgrade…".into());
-            return;
-        }
+        let lower = version.to_ascii_lowercase();
         let from = u.from.clone().unwrap_or_else(|| "?".into());
-        u.phase = if from == version {
-            UpgradePhase::Done(format!("Restarted, still {}", short_version(&version)))
-        } else {
-            UpgradePhase::Done(format!("{} → {}", short_version(&from), short_version(&version)))
-        };
+        let changed = short_version(&from) != short_version(&version);
+        match &u.phase {
+            // ESP8266 goes through tasmota-minimal, ESP32 through its safeboot partition:
+            // the real firmware comes after one more restart.
+            UpgradePhase::Restarting | UpgradePhase::Progress(_) | UpgradePhase::Sent
+                if lower.contains("safeboot") || lower.contains("minimal") =>
+            {
+                let what = if lower.contains("safeboot") { "Safeboot" } else { "Minimal firmware" };
+                u.phase = UpgradePhase::Progress(format!("{what} running, writing the new firmware…"));
+            }
+            UpgradePhase::Restarting => {
+                u.phase = if changed {
+                    UpgradePhase::Done(format!("{} → {}", short_version(&from), short_version(&version)))
+                } else {
+                    UpgradePhase::Done(format!("Restarted, still {}", short_version(&version)))
+                };
+            }
+            // Finished or failed earlier, but the device now runs another version: it did
+            // upgrade after all (slow restart, or upgraded from another app).
+            UpgradePhase::Done(_) | UpgradePhase::Failed(_) | UpgradePhase::Note(_) if changed => {
+                u.phase =
+                    UpgradePhase::Done(format!("{} → {}", short_version(&from), short_version(&version)));
+            }
+            _ => {}
+        }
     }
 }
 
@@ -381,12 +446,21 @@ pub struct Store {
 }
 
 impl Store {
+    /// A message that was sent live (not a retained one replayed by the broker).
     pub fn handle(&mut self, topic: &str, payload: &str) -> Vec<Action> {
+        self.handle_message(topic, payload, false)
+    }
+
+    /// `retained`: replayed by the broker on subscribe. Retained messages fill in data but
+    /// never prove that a device is alive.
+    pub fn handle_message(&mut self, topic: &str, payload: &str, retained: bool) -> Vec<Action> {
         let mut out = Vec::new();
 
         if let Some(rest) = topic.strip_prefix("tasmota/discovery/") {
             if rest.ends_with("/config") {
-                self.handle_discovery(payload, &mut out);
+                if let Some(key) = self.handle_discovery(payload, &mut out) {
+                    self.query_if_needed(&key, &mut out);
+                }
             }
             return out;
         }
@@ -419,6 +493,11 @@ impl Store {
         let json: Option<Value> = serde_json::from_str::<Value>(payload).ok().filter(Value::is_object);
 
         let Some(d) = self.devices.get_mut(&key) else { return out };
+        let is_lwt = is_tele && suffix == "LWT";
+        if !is_lwt && !retained {
+            d.answered = true;
+            d.asked = None;
+        }
         match (is_tele, suffix.as_str()) {
             (true, "LWT") => d.set_online(payload.eq_ignore_ascii_case("online")),
             (true, "STATE") => {
@@ -449,16 +528,26 @@ impl Store {
             _ => {}
         }
 
-        if d.is_online() && !d.queried {
-            d.queried = true;
-            self.query(&key, &mut out);
-        }
+        self.query_if_needed(&key, &mut out);
         out
     }
 
-    fn handle_discovery(&mut self, payload: &str, out: &mut Vec<Action>) {
-        let Ok(v) = serde_json::from_str::<Value>(payload) else { return };
-        let Some(t) = v.get("t").and_then(Value::as_str).filter(|t| !t.is_empty()) else { return };
+    /// Asks for the full status once per LWT, unless the device is reported offline.
+    fn query_if_needed(&mut self, key: &str, out: &mut Vec<Action>) {
+        let Some(d) = self.devices.get_mut(key) else { return };
+        if d.online == Some(false) || d.queried {
+            return;
+        }
+        d.queried = true;
+        if !d.answered {
+            d.asked = Some(Instant::now());
+        }
+        self.query(key, out);
+    }
+
+    fn handle_discovery(&mut self, payload: &str, out: &mut Vec<Action>) -> Option<String> {
+        let Ok(v) = serde_json::from_str::<Value>(payload) else { return None };
+        let t = v.get("t").and_then(Value::as_str).filter(|t| !t.is_empty())?;
         let ft = v.get("ft").and_then(Value::as_str).unwrap_or(DEFAULT_FULLTOPIC).to_string();
         let mut tp = default_prefixes();
         if let Some(a) = v.get("tp").and_then(Value::as_array) {
@@ -502,6 +591,7 @@ impl Store {
             out.push(Action::Subscribe(format!("{}+", d.tele_prefix)));
             out.push(Action::Subscribe(format!("{}+", d.stat_prefix)));
         }
+        Some(t.to_string())
     }
 
     fn query(&self, key: &str, out: &mut Vec<Action>) {
@@ -519,25 +609,32 @@ impl Store {
         }
     }
 
-    /// Asks every online device for a full status again.
+    /// Asks every device not reported offline for a full status again (also the ones that
+    /// did not answer: they get another `NO_ANSWER_AFTER` to do it).
     pub fn refresh_all(&mut self) -> Vec<Action> {
         let mut out = Vec::new();
         let keys: Vec<String> =
-            self.devices.iter().filter(|(_, d)| d.is_online()).map(|(k, _)| k.clone()).collect();
+            self.devices.iter().filter(|(_, d)| d.online != Some(false)).map(|(k, _)| k.clone()).collect();
         for k in keys {
+            if let Some(d) = self.devices.get_mut(&k).filter(|d| !d.answered) {
+                d.asked = Some(Instant::now());
+            }
             self.query(&k, &mut out);
         }
         out
     }
 
+    /// A state-changing command. None when the device is not online (offline, not answering
+    /// or not answered yet): commands only go to devices that just proved they are there.
     pub fn command(&self, key: &str, cmd: &str, payload: &str) -> Option<Action> {
         self.devices
             .get(key)
+            .filter(|d| d.is_online())
             .map(|d| Action::Publish { topic: d.cmnd(cmd), payload: payload.into() })
     }
 
     pub fn start_upgrade(&mut self, key: &str) -> Option<Action> {
-        let d = self.devices.get_mut(key)?;
+        let d = self.devices.get_mut(key).filter(|d| d.is_online())?;
         d.upgrade = Some(Upgrade {
             started: Instant::now(),
             from: d.version.clone(),
@@ -662,6 +759,114 @@ mod tests {
         assert_eq!(d.rssi, Some(96));
         s.handle("stat/credenza/RESULT", r#"{"POWER2":"ON"}"#);
         assert_eq!(s.devices["credenza"].power[1], Some(true));
+    }
+
+    fn status_fwr(version: &str) -> String {
+        format!(r#"{{"StatusFWR":{{"Version":"{version}","Core":"3_1_3"}}}}"#)
+    }
+
+    fn sent(out: &[Action], cmd: &str) -> bool {
+        out.iter().any(|a| matches!(a, Action::Publish { topic, .. } if topic.ends_with(cmd)))
+    }
+
+    fn long_ago(d: Duration) -> Instant {
+        Instant::now().checked_sub(d).unwrap()
+    }
+
+    #[test]
+    fn stale_retained_online_is_not_online() {
+        let mut s = Store::default();
+        // Unplugged for days: the broker still has "Online" and a retained POWER.
+        assert!(sent(&s.handle_message("tele/plug/LWT", "Online", true), "/STATUS"));
+        s.handle_message("stat/plug/POWER", "ON", true);
+        let d = &s.devices["plug"];
+        assert!(!d.is_online());
+        assert_eq!(d.reachable(), None, "still waiting for the answer");
+        assert!(s.command("plug", "POWER1", "TOGGLE").is_none());
+        assert!(s.start_upgrade("plug").is_none());
+
+        s.devices.get_mut("plug").unwrap().asked = Some(long_ago(NO_ANSWER_AFTER * 2));
+        let d = &s.devices["plug"];
+        assert!(d.no_answer());
+        assert_eq!(d.reachable(), Some(false));
+        assert_eq!(d.offline_label(), Some("No answer"));
+
+        // Plugged in: the device sends LWT Online again and answers.
+        assert!(sent(&s.handle("tele/plug/LWT", "Online"), "/STATUS"));
+        s.handle("stat/plug/STATUS0", &status_fwr("13.3.0(tasmota32)"));
+        assert!(s.devices["plug"].is_online());
+        assert!(s.command("plug", "POWER1", "TOGGLE").is_some());
+    }
+
+    #[test]
+    fn every_lwt_online_asks_again() {
+        let mut s = Store::default();
+        s.handle_message("tele/plug/LWT", "Online", true);
+        s.handle("tele/plug/STATE", r#"{"Wifi":{"RSSI":60}}"#);
+        assert!(s.devices["plug"].is_online());
+        // No Offline in between (a stale "Online" before): still a new full status query.
+        let out = s.handle("tele/plug/LWT", "Online");
+        assert!(sent(&out, "/STATUS"));
+        assert!(!s.devices["plug"].is_online(), "online again only after it answers");
+    }
+
+    #[test]
+    fn discovery_without_lwt_is_asked() {
+        let mut s = Store::default();
+        let out = s.handle_message("tasmota/discovery/AABB/config", r#"{"t":"lamp","sw":"15.0.1"}"#, true);
+        assert!(sent(&out, "/STATUS"));
+        assert_eq!(s.devices["lamp"].reachable(), None);
+    }
+
+    #[test]
+    fn esp32_upgrade_through_safeboot() {
+        let mut s = Store::default();
+        s.handle("tele/a8t/LWT", "Online");
+        s.handle("stat/a8t/STATUS0", &status_fwr("13.3.0(tasmota32)"));
+        assert!(s.start_upgrade("a8t").is_some());
+        s.handle("tele/a8t/LWT", "Offline");
+        s.handle("tele/a8t/LWT", "Online");
+        s.handle("stat/a8t/STATUS0", &status_fwr("13.3.0(safeboot)"));
+        let u = s.devices["a8t"].upgrade.as_ref().unwrap();
+        assert!(u.is_active(), "safeboot is not the end: {:?}", u.phase);
+        s.handle("tele/a8t/LWT", "Offline");
+        s.handle("tele/a8t/LWT", "Online");
+        s.handle("stat/a8t/STATUS0", &status_fwr("16.0.0(tasmota32)"));
+        let u = s.devices["a8t"].upgrade.as_ref().unwrap();
+        assert!(matches!(&u.phase, UpgradePhase::Done(m) if m == "13.3.0 → 16.0.0"), "{:?}", u.phase);
+    }
+
+    #[test]
+    fn same_version_is_not_shown_as_upgrade() {
+        let mut s = Store::default();
+        s.handle("tele/a8t/LWT", "Online");
+        s.handle("stat/a8t/STATUS0", &status_fwr("16.0.0(tasmota32)"));
+        s.start_upgrade("a8t");
+        s.handle("tele/a8t/LWT", "Offline");
+        s.handle("tele/a8t/LWT", "Online");
+        s.handle("stat/a8t/STATUS0", &status_fwr("16.0.0(release-tasmota32)"));
+        let u = s.devices["a8t"].upgrade.as_ref().unwrap();
+        assert!(matches!(&u.phase, UpgradePhase::Done(m) if m == "Restarted, still 16.0.0"), "{:?}", u.phase);
+    }
+
+    #[test]
+    fn failed_upgrade_clears_when_device_comes_back() {
+        let mut s = Store::default();
+        s.handle("tele/a8t/LWT", "Online");
+        s.handle("stat/a8t/STATUS0", &status_fwr("13.3.0(tasmota32)"));
+        s.start_upgrade("a8t");
+        s.devices.get_mut("a8t").unwrap().upgrade.as_mut().unwrap().started = long_ago(UPGRADE_TIMEOUT * 2);
+        s.check_timeouts();
+        assert!(matches!(s.devices["a8t"].upgrade.as_ref().unwrap().phase, UpgradePhase::Failed(_)));
+        // Comes back: the alarm becomes a note.
+        s.handle("tele/a8t/LWT", "Online");
+        s.handle("stat/a8t/STATUS0", &status_fwr("13.3.0(tasmota32)"));
+        assert!(matches!(s.devices["a8t"].upgrade.as_ref().unwrap().phase, UpgradePhase::Note(_)));
+        // Upgraded later (another app): shown as done.
+        s.handle("tele/a8t/LWT", "Online");
+        s.handle("stat/a8t/STATUS0", &status_fwr("16.0.0(tasmota32)"));
+        let u = s.devices["a8t"].upgrade.as_ref().unwrap();
+        assert!(matches!(&u.phase, UpgradePhase::Done(m) if m == "13.3.0 → 16.0.0"), "{:?}", u.phase);
     }
 
     #[test]

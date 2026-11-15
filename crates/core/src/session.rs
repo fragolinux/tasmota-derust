@@ -99,7 +99,9 @@ impl Session {
                                         s.status = e;
                                         Vec::new()
                                     }
-                                    MqttEvent::Message { topic, payload } => s.store.handle(&topic, &payload),
+                                    MqttEvent::Message { topic, payload, retained } => {
+                                        s.store.handle_message(&topic, &payload, retained)
+                                    }
                                 }
                             };
                             match mqtt.upgrade() {
@@ -235,7 +237,8 @@ fn run_actions(mqtt: &Mqtt, actions: Vec<Action>) {
 
 #[derive(Serialize, Clone, Debug)]
 pub struct UpgradeInfo {
-    /// "sent", "progress", "restarting", "done" or "failed".
+    /// "sent", "progress", "restarting", "done", "failed" or "note" (an old failure, shown
+    /// only in the device details).
     pub state: &'static str,
     pub text: String,
 }
@@ -244,7 +247,11 @@ pub struct UpgradeInfo {
 pub struct DeviceInfo {
     pub topic: String,
     pub name: String,
+    /// true: online and answering. false: offline, or not answering (`no_answer`).
+    /// null: just discovered, waiting for its answer.
     pub online: Option<bool>,
+    /// Not reported offline, but it did not answer the status query.
+    pub no_answer: bool,
     pub web_url: Option<String>,
     pub module: Option<String>,
     pub hostname: Option<String>,
@@ -306,7 +313,8 @@ impl DeviceInfo {
         DeviceInfo {
             topic: d.topic.clone(),
             name: d.display_name().to_string(),
-            online: d.online,
+            online: d.reachable(),
+            no_answer: d.no_answer(),
             web_url: d.web_url(),
             module: d.module.clone(),
             hostname: d.hostname.clone(),
@@ -350,6 +358,7 @@ impl DeviceInfo {
                     UpgradePhase::Restarting => ("restarting", "Restarting…".to_string()),
                     UpgradePhase::Done(m) => ("done", m.clone()),
                     UpgradePhase::Failed(m) => ("failed", m.clone()),
+                    UpgradePhase::Note(m) => ("note", m.clone()),
                 };
                 UpgradeInfo { state, text }
             }),

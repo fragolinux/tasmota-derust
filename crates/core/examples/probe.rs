@@ -42,7 +42,7 @@ fn main() {
                 msgs += 1;
                 let payload = String::from_utf8_lossy(&p.payload).into_owned();
                 // Passive probe: whatever the app would send is discarded, never published.
-                let _ = store.handle(&p.topic, &payload);
+                let _ = store.handle_message(&p.topic, &payload, p.retain);
             }
             Ok(Err(e)) => {
                 eprintln!("connection error: {e}");

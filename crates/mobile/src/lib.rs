@@ -71,7 +71,10 @@ impl From<session::CommandError> for CommandError {
 pub struct Device {
     pub topic: String,
     pub name: String,
+    /// true online and answering, false offline or not answering, null waiting.
     pub online: Option<bool>,
+    /// Not reported offline, but it did not answer the status query.
+    pub no_answer: bool,
     pub web_url: Option<String>,
     pub module: Option<String>,
     pub hostname: Option<String>,
@@ -136,6 +139,7 @@ impl From<session::DeviceInfo> for Device {
             topic: d.topic,
             name: d.name,
             online: d.online,
+            no_answer: d.no_answer,
             web_url: d.web_url,
             module: d.module,
             hostname: d.hostname,

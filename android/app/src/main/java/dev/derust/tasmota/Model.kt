@@ -50,6 +50,8 @@ fun Device.matches(query: String): Boolean {
 }
 
 val Device.isOffline get() = online == false
+/** "Offline" (LWT) or "No answer" (did not answer the status query). */
+val Device.offlineLabel get() = if (noAnswer) "No answer" else "Offline"
 val Device.upgradeBusy get() = upgradeState in setOf("sent", "progress", "restarting")
 
 /** Tasmota needs intermediate steps to upgrade from versions older than 9.1. */

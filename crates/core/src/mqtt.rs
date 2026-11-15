@@ -18,7 +18,8 @@ const BASE_TOPICS: &[&str] = &["tasmota/discovery/+/config", "+/+/LWT", "tele/+/
 pub enum MqttEvent {
     Connected,
     Disconnected(String),
-    Message { topic: String, payload: String },
+    /// `retained`: replayed by the broker on subscribe, not sent just now.
+    Message { topic: String, payload: String, retained: bool },
 }
 
 pub struct Mqtt {
@@ -106,6 +107,7 @@ fn run(
                 Some(MqttEvent::Connected)
             }
             Ok(Event::Incoming(Packet::Publish(p))) => Some(MqttEvent::Message {
+                retained: p.retain,
                 topic: p.topic,
                 payload: String::from_utf8_lossy(&p.payload).into_owned(),
             }),

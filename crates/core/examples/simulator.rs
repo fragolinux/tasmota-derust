@@ -4,7 +4,9 @@
 //!   cargo run -p tasmota-derust-core --example simulator [-- 127.0.0.1:1883]
 //!
 //! It answers the read queries (Status 0, Module, SSId1/2) and the commands the apps send
-//! (POWER<n> TOGGLE, AP, UPGRADE), so every screen can be exercised.
+//! (POWER<n> TOGGLE, AP, UPGRADE), so every screen can be exercised. Special cases:
+//!   "ESP32 plug"     upgrades like a real ESP32: restarts into safeboot, then into 16.0.0
+//!   "Unplugged plug" its retained LWT says Online, but it never answers (stale LWT)
 //!
 //! Safety: it refuses any broker that is not on this machine (127.0.0.1 / ::1 / localhost),
 //! so it can never publish fake states or answers on a real home broker.
@@ -34,6 +36,11 @@ struct Fake {
     ip: String,
     mac: String,
     sensor: bool,
+    esp32: bool,
+    /// Running the ESP32 safeboot image (in the middle of an upgrade).
+    safeboot: bool,
+    /// Retained LWT "Online" although the device is gone.
+    stale_lwt: bool,
 }
 
 const SSIDS: [&str; 2] = ["Home-Main", "Home-Extender"];
@@ -49,6 +56,8 @@ fn devices() -> Vec<Fake> {
         ("giardino", "Garden lights", "Sonoff 4CH", 4, 55, 2, "8.5.1", true, "Hardware Watchdog", 600, false),
         ("termostato", "Thermostat", "ESP32-DevKit", 1, 100, 1, "16.0.0", true, "Power On", 86_400 * 41, true),
         ("vecchia_presa", "Old plug", "Sonoff S20", 1, 0, 1, "6.7.1", false, "Power On", 0, false),
+        ("presa_esp32", "ESP32 plug", "NOUS A8T", 1, 70, 1, "13.3.0", true, "Power On", 7_200, false),
+        ("staccata", "Unplugged plug", "NOUS A8T", 1, 0, 1, "13.3.0", false, "Power On", 0, false),
     ];
     list.iter()
         .enumerate()
@@ -69,6 +78,9 @@ fn devices() -> Vec<Fake> {
             ip: format!("10.99.0.{}", 20 + i),
             mac: format!("AA:BB:CC:00:00:{:02X}", 0x10 + i),
             sensor,
+            esp32: topic == "presa_esp32" || topic == "staccata",
+            safeboot: false,
+            stale_lwt: topic == "staccata",
         })
         .collect()
 }
@@ -116,15 +128,25 @@ impl Fake {
         json!({
             "Status": { "Module": 1, "DeviceName": self.name, "FriendlyName": [self.name], "Topic": self.topic },
             "StatusPRM": { "Baudrate": 115200, "GroupTopic": "tasmotas",
-                           "OtaUrl": "http://ota.tasmota.com/tasmota/release/tasmota.bin.gz",
+                           "OtaUrl": if self.esp32 { "http://ota.tasmota.com/tasmota32/release/tasmota32.bin" } else { "http://ota.tasmota.com/tasmota/release/tasmota.bin.gz" },
                            "RestartReason": self.restart_reason, "Uptime": Self::tasmota_duration(self.uptime()),
                            "BootCount": self.boot_count, "Sleep": 50 },
-            "StatusFWR": { "Version": format!("{}(release-tasmota)", self.version), "Core": "2_7_8", "SDK": "2.2.2-dev(38a443e)", "Hardware": "ESP8266EX" },
-            "StatusMEM": { "ProgramSize": 651, "Free": 352, "Heap": 25 },
+            "StatusFWR": { "Version": self.full_version(),
+                           "Core": if self.esp32 { "3_1_3" } else { "2_7_8" },
+                           "SDK": if self.esp32 { "5.3.3.250501" } else { "2.2.2-dev(38a443e)" },
+                           "Hardware": if self.esp32 { "ESP32-D0WD-V3 v3.1" } else { "ESP8266EX" } },
+            "StatusMEM": if self.safeboot { json!({ "ProgramSize": 772, "Free": 59, "Heap": 120 }) }
+                         else if self.esp32 { json!({ "ProgramSize": 1889, "Free": 990, "Heap": 140 }) }
+                         else { json!({ "ProgramSize": 651, "Free": 352, "Heap": 25 }) },
             "StatusNET": { "Hostname": format!("{}-1234", self.topic), "IPAddress": self.ip, "Gateway": "10.99.0.1", "Mac": self.mac },
             "StatusMQT": { "MqttHost": "127.0.0.1", "MqttClient": format!("DVES_{}", self.topic), "MqttCount": 1 },
             "StatusSTS": self.state(),
         })
+    }
+
+    fn full_version(&self) -> String {
+        let build = if self.safeboot { "safeboot" } else if self.esp32 { "tasmota32" } else { "release-tasmota" };
+        format!("{}({build})", self.version)
     }
 
     fn discovery(&self) -> Value {
@@ -186,7 +208,8 @@ fn main() {
                 let _ = client.try_subscribe("cmnd/+/+", QoS::AtMostOnce);
                 for f in fakes.lock().unwrap().iter() {
                     publish(&client, format!("tasmota/discovery/{}/config", f.mac.replace(':', "")), f.discovery().to_string(), true);
-                    publish(&client, format!("tele/{}/LWT", f.topic), if f.online { "Online" } else { "Offline" }.into(), true);
+                    let lwt = if f.online || f.stale_lwt { "Online" } else { "Offline" };
+                    publish(&client, format!("tele/{}/LWT", f.topic), lwt.into(), true);
                     if f.online {
                         publish(&client, format!("tele/{}/STATE", f.topic), f.state().to_string(), false);
                     }
@@ -245,6 +268,20 @@ fn handle(client: &Client, fakes: &Arc<Mutex<Vec<Fake>>>, topic: &str, cmd: &str
             f.ap = payload.parse().unwrap();
             restart(client.clone(), fakes.clone(), topic.to_string(), None);
         }
+        "UPGRADE" if payload == "1" && f.esp32 => {
+            send(stat("UPGRADE"), json!({ "Upgrade": "Version 16.0.0 from http://ota.tasmota.com/tasmota32/release/tasmota32.bin" }).to_string());
+            // ESP32: first into the safeboot partition, which downloads and writes the new
+            // image, then into the new firmware.
+            let (c, fk, t) = (client.clone(), fakes.clone(), topic.to_string());
+            thread::spawn(move || {
+                restart_now(&c, &fk, &t, |f| f.safeboot = true);
+                thread::sleep(Duration::from_secs(10));
+                restart_now(&c, &fk, &t, |f| {
+                    f.safeboot = false;
+                    f.version = "16.0.0".into();
+                });
+            });
+        }
         "UPGRADE" if payload == "1" => {
             send(stat("UPGRADE"), json!({ "Upgrade": "Version 16.0.0 from http://ota.tasmota.com/tasmota/release/tasmota.bin.gz" }).to_string());
             restart(client.clone(), fakes.clone(), topic.to_string(), Some("16.0.0"));
@@ -256,24 +293,31 @@ fn handle(client: &Client, fakes: &Arc<Mutex<Vec<Fake>>>, topic: &str, cmd: &str
 /// Goes offline for a few seconds, then comes back like a restarted Tasmota.
 fn restart(client: Client, fakes: Arc<Mutex<Vec<Fake>>>, topic: String, new_version: Option<&'static str>) {
     thread::spawn(move || {
-        let pub_ = |t: String, p: String, r: bool| {
-            let _ = client.try_publish(t, QoS::AtMostOnce, r, p.into_bytes());
-        };
-        thread::sleep(Duration::from_secs(2));
-        pub_(format!("tele/{topic}/LWT"), "Offline".into(), true);
-        thread::sleep(Duration::from_secs(5));
-        let mut all = fakes.lock().unwrap();
-        let Some(f) = all.iter_mut().find(|f| f.topic == topic) else { return };
-        if let Some(v) = new_version {
-            f.version = v.into();
-        }
-        f.started = Instant::now();
-        f.uptime_base = 0;
-        f.boot_count += 1;
-        f.restart_reason = "Software/System restart";
-        pub_(format!("tele/{topic}/LWT"), "Online".into(), true);
-        let info1 = json!({ "Info1": { "Module": f.module, "Version": format!("{}(release-tasmota)", f.version), "FallbackTopic": format!("cmnd/DVES_{topic}_fb/"), "GroupTopic": "tasmotas" } });
-        pub_(format!("tele/{topic}/INFO1"), info1.to_string(), false);
-        pub_(format!("tele/{topic}/STATE"), f.state().to_string(), false);
+        restart_now(&client, &fakes, &topic, |f| {
+            if let Some(v) = new_version {
+                f.version = v.into();
+            }
+        })
     });
+}
+
+/// Restart on the calling thread: offline, `change` applied, online again.
+fn restart_now(client: &Client, fakes: &Mutex<Vec<Fake>>, topic: &str, change: impl FnOnce(&mut Fake)) {
+    let pub_ = |t: String, p: String, r: bool| {
+        let _ = client.try_publish(t, QoS::AtMostOnce, r, p.into_bytes());
+    };
+    thread::sleep(Duration::from_secs(2));
+    pub_(format!("tele/{topic}/LWT"), "Offline".into(), true);
+    thread::sleep(Duration::from_secs(5));
+    let mut all = fakes.lock().unwrap();
+    let Some(f) = all.iter_mut().find(|f| f.topic == topic) else { return };
+    change(f);
+    f.started = Instant::now();
+    f.uptime_base = 0;
+    f.boot_count += 1;
+    f.restart_reason = "Software/System restart";
+    pub_(format!("tele/{topic}/LWT"), "Online".into(), true);
+    let info1 = json!({ "Info1": { "Module": f.module, "Version": f.full_version(), "FallbackTopic": format!("cmnd/DVES_{topic}_fb/"), "GroupTopic": "tasmotas" } });
+    pub_(format!("tele/{topic}/INFO1"), info1.to_string(), false);
+    pub_(format!("tele/{topic}/STATE"), f.state().to_string(), false);
 }

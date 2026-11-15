@@ -46,6 +46,7 @@ import dev.derust.tasmota.core.Device
 import dev.derust.tasmota.core.Snapshot
 import dev.derust.tasmota.fmtDuration
 import dev.derust.tasmota.isOffline
+import dev.derust.tasmota.offlineLabel
 import dev.derust.tasmota.needsUpgradePath
 import dev.derust.tasmota.upgradeBusy
 import dev.derust.tasmota.ui.theme.Green
@@ -90,7 +91,7 @@ fun DeviceSheet(
             }
             Text(
                 listOfNotNull(
-                    when (d.online) { true -> "Online"; false -> "Offline"; null -> "Unknown" },
+                    when (d.online) { true -> "Online"; false -> d.offlineLabel; null -> "Waiting for an answer…" },
                     d.module,
                 ).joinToString(" · "),
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -134,7 +135,12 @@ fun DeviceSheet(
                     }
                     Text(
                         d.upgradeText ?: "",
-                        color = when (st) { "done" -> Green; "failed" -> Red; else -> MaterialTheme.colorScheme.onSurface },
+                        color = when (st) {
+                            "done" -> Green
+                            "failed" -> Red
+                            "note" -> MaterialTheme.colorScheme.onSurfaceVariant
+                            else -> MaterialTheme.colorScheme.onSurface
+                        },
                     )
                 }
             }
