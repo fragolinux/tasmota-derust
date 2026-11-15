@@ -25,6 +25,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# Never stop in a pager (git diff/log would wait for a key press).
+export GIT_PAGER=cat PAGER=cat
 forced=${1:-}
 dry=${DRY_RUN:-0}
 
