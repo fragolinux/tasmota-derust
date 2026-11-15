@@ -105,6 +105,10 @@ fn image(url: &str) -> Option<(&'static str, &'static str, i64, i64)> {
             "release-9.1.0/tasmota-lite.bin.gz",
             ("9.1.0", "lite", 473, 339),
         ),
+        (
+            "release-16.0.0/tasmota.bin.gz",
+            ("16.0.0", "tasmota", 651, 459),
+        ),
         ("release/tasmota.bin.gz", ("16.0.0", "tasmota", 651, 459)),
         (
             "release/tasmota-minimal.bin.gz",

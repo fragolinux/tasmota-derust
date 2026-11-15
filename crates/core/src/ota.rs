@@ -2,7 +2,9 @@
 //!
 //! From the Tasmota docs (Upgrading > Upgrade Flow): old firmware must go through
 //! 5.14.0 → 6.7.1 → 7.2.0 → 8.5.1 → 9.1 → current release, one step at a time, using the
-//! binaries linked there. `.gz` images work from 8.2 on. If an image does not fit in the free
+//! binaries linked there. ESP8266 devices older than 10.0.0.3 also stop at 16.0.0 once a newer
+//! release is out: 16.0.0 is the last release that still migrates their settings (the
+//! development branch dropped every settings step older than 10.0.0.3). `.gz` images work from 8.2 on. If an image does not fit in the free
 //! flash, Tasmota first installs `<name>-minimal.bin` from the same folder by itself, then the
 //! image. Firmware older than 4.2.0 can't do it over the air (the next files are only on
 //! GitHub, over https).
@@ -25,6 +27,10 @@ pub const GZ_SINCE: [u32; 2] = [8, 2];
 pub const OLDEST_OTA: [u32; 3] = [4, 2, 0];
 /// Below this the path is needed; from here on, one upgrade to the latest release.
 pub const PATH_END: [u32; 3] = [9, 1, 0];
+/// The last release that still runs the settings migrations of 9.x (see the module docs).
+pub const MILESTONE: [u32; 3] = [16, 0, 0];
+/// Devices below this settings version need the milestone before a newer release.
+const MILESTONE_BELOW: [u32; 4] = [10, 0, 0, 3];
 /// Free flash kept in reserve when checking whether an image fits.
 const MARGIN: u64 = 4 * 1024;
 
@@ -110,10 +116,24 @@ pub fn minimal_url(url: &str) -> String {
 }
 
 fn is_path_url(url: &str) -> bool {
-    PATH.iter().any(|s| {
-        url == format!("{OTA_BASE}{}", s.file)
-            || s.file_gz.is_some_and(|g| url == format!("{OTA_BASE}{g}"))
-    })
+    url.starts_with(&format!("{OTA_BASE}release-{}/", fmt_ver(MILESTONE)))
+        || PATH.iter().any(|s| {
+            url == format!("{OTA_BASE}{}", s.file)
+                || s.file_gz.is_some_and(|g| url == format!("{OTA_BASE}{g}"))
+        })
+}
+
+/// The milestone is needed: an ESP8266 whose settings are older than 10.0.0.3, when the latest
+/// release is newer than 16.0.0 (or not known: better one step too many than missed migrations).
+fn needs_milestone(v: &[u32], esp32: bool, latest: Option<&str>) -> bool {
+    let mut full = [0u32; 4];
+    for (i, x) in v.iter().take(4).enumerate() {
+        full[i] = *x;
+    }
+    let newer = latest
+        .and_then(parse_version)
+        .is_none_or(|l| ver3(&l) > MILESTONE);
+    !esp32 && full < MILESTONE_BELOW && newer
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -129,6 +149,8 @@ pub enum Plan {
         gz: bool,
         index: usize,
         total: usize,
+        /// The 16.0.0 milestone: a full release image, no free flash check (like the last step).
+        milestone: bool,
     },
     /// Upgrade to the latest release. `set_url`: OtaUrl to set first (when the device still
     /// points at a path image or at a dead default), otherwise its own OtaUrl is used.
@@ -139,13 +161,20 @@ pub enum Plan {
     },
 }
 
-pub fn plan(version: Option<&str>, ota_url: Option<&str>, esp32: bool) -> Plan {
+/// `latest`: the latest release, to know whether the 16.0.0 milestone is needed.
+pub fn plan(
+    version: Option<&str>,
+    ota_url: Option<&str>,
+    esp32: bool,
+    latest: Option<&str>,
+) -> Plan {
     let Some(version) = version else {
         return Plan::Unknown;
     };
-    let Some(v) = parse_version(version).map(|v| ver3(&v)) else {
+    let Some(full) = parse_version(version) else {
         return Plan::Unknown;
     };
+    let v = ver3(&full);
     if v < PATH_END && esp32 {
         return Plan::Manual(
             "ESP32 with firmware older than 9.1: upgrade it with the Tasmota web installer or by serial.".into(),
@@ -159,7 +188,8 @@ pub fn plan(version: Option<&str>, ota_url: Option<&str>, esp32: bool) -> Plan {
         ));
     }
     let remaining: Vec<&PathStep> = PATH.iter().filter(|s| s.version > v).collect();
-    let total = remaining.len() + 1;
+    let milestone = needs_milestone(&full, esp32, latest);
+    let total = remaining.len() + usize::from(milestone) + 1;
     if let Some(step) = remaining.first() {
         let gz_ok = [v[0], v[1]] >= GZ_SINCE;
         let file = match step.file_gz {
@@ -172,6 +202,22 @@ pub fn plan(version: Option<&str>, ota_url: Option<&str>, esp32: bool) -> Plan {
             gz: file.ends_with(".gz"),
             index: 1,
             total,
+            milestone: false,
+        };
+    }
+    if milestone {
+        // Every path image is 9.1 or newer here: .gz is fine.
+        return Plan::Step {
+            target: MILESTONE,
+            url: format!(
+                "{OTA_BASE}release-{}/{}.bin.gz",
+                fmt_ver(MILESTONE),
+                final_build(version)
+            ),
+            gz: true,
+            index: 1,
+            total,
+            milestone: true,
         };
     }
     let own_ok = ota_url
@@ -417,7 +463,12 @@ pub fn plan_info(d: &Device, targets: &Targets, sizes: &Sizes) -> PlanInfo {
         .to_string();
     let backup =
         "Back up the configuration first (device web UI: Configuration > Backup Configuration).";
-    match plan(d.version.as_deref(), d.ota_url.as_deref(), esp32) {
+    match plan(
+        d.version.as_deref(),
+        d.ota_url.as_deref(),
+        esp32,
+        targets.release.as_deref(),
+    ) {
         Plan::Unknown => PlanInfo {
             kind: "unknown",
             title: "Firmware version not known yet".into(),
@@ -479,6 +530,7 @@ pub fn plan_info(d: &Device, targets: &Targets, sizes: &Sizes) -> PlanInfo {
             url,
             gz,
             total,
+            milestone,
             ..
         } => {
             let to = fmt_ver(target);
@@ -514,6 +566,16 @@ pub fn plan_info(d: &Device, targets: &Targets, sizes: &Sizes) -> PlanInfo {
                 info.details.push("Intermediate steps install the small \"lite\" build; the full firmware comes with the last step.".into());
             }
             info.details.push(format!("OtaUrl will be set to {url}"));
+            if milestone {
+                info.details.push(format!(
+                    "{to} is the last release that still migrates the settings of firmware older \
+                     than 10.0: the newer releases skip those steps."
+                ));
+                // The same full image the last step installs: Tasmota goes through its minimal
+                // image by itself when needed.
+                info.can_start = true;
+                return info;
+            }
             if esp32 {
                 info.can_start = true;
                 return info;
@@ -598,8 +660,9 @@ pub fn plan_info(d: &Device, targets: &Targets, sizes: &Sizes) -> PlanInfo {
 mod tests {
     use super::*;
 
+    /// Latest release newer than the milestone (the usual case from now on).
     fn step(version: &str) -> Plan {
-        plan(Some(version), None, false)
+        plan(Some(version), None, false, Some("16.1.0"))
     }
 
     #[test]
@@ -620,7 +683,7 @@ mod tests {
             "http://ota.tasmota.com/tasmota/release-7.2.0/tasmota-lite.bin"
         );
         assert!(!gz);
-        assert_eq!(total, 4, "7.2.0, 8.5.1, 9.1.0, latest");
+        assert_eq!(total, 5, "7.2.0, 8.5.1, 9.1.0, 16.0.0, latest");
 
         // 8.1 does not take .gz, 8.2 does.
         let Plan::Step { url, gz, .. } = step("8.1.0(tasmota)") else {
@@ -643,17 +706,81 @@ mod tests {
         let Plan::Step { target, total, .. } = step("9.0.0.3(tasmota)") else {
             panic!()
         };
-        assert_eq!((target, total), ([9, 1, 0], 2));
+        assert_eq!((target, total), ([9, 1, 0], 3));
+    }
+
+    #[test]
+    fn milestone_16() {
+        // From 9.1 (lite, from the path): the full image of its build in release-16.0.0.
+        let Plan::Step {
+            target,
+            url,
+            gz,
+            total,
+            milestone,
+            ..
+        } = step("9.1.0(lite)")
+        else {
+            panic!()
+        };
+        assert_eq!(target, [16, 0, 0]);
+        assert_eq!(
+            url,
+            "http://ota.tasmota.com/tasmota/release-16.0.0/tasmota.bin.gz"
+        );
+        assert!(gz && milestone);
+        assert_eq!(total, 2);
+        let Plan::Step { url, .. } = step("9.5.0(sensors)") else {
+            panic!()
+        };
+        assert!(url.ends_with("release-16.0.0/tasmota-sensors.bin.gz"));
+        // Settings already 10.0.0.3 or newer: straight to the latest.
+        assert!(matches!(step("10.0.0.3(tasmota)"), Plan::Final { .. }));
+        assert!(matches!(step("10.0.0(tasmota)"), Plan::Step { .. }));
+        assert!(matches!(step("12.0.2(tasmota)"), Plan::Final { .. }));
+        // Latest is 16.0.0 itself: no extra step.
+        assert!(matches!(
+            plan(Some("9.1.0(lite)"), None, false, Some("16.0.0")),
+            Plan::Final { .. }
+        ));
+        // Latest not known: stop at 16.0.0 to be safe.
+        assert!(matches!(
+            plan(Some("9.1.0(lite)"), None, false, None),
+            Plan::Step {
+                milestone: true,
+                ..
+            }
+        ));
+        // ESP32: unchanged.
+        assert!(matches!(
+            plan(Some("9.5.0(tasmota32)"), None, true, Some("16.1.0")),
+            Plan::Final { .. }
+        ));
+        // On 16.0.0 from the milestone: the OtaUrl goes back to the release channel.
+        let p = plan(
+            Some("16.0.0(release-tasmota)"),
+            Some("http://ota.tasmota.com/tasmota/release-16.0.0/tasmota.bin.gz"),
+            false,
+            Some("16.1.0"),
+        );
+        assert_eq!(
+            p,
+            Plan::Final {
+                set_url: Some(format!("{OTA_BASE}release/tasmota.bin.gz")),
+                index: 1,
+                total: 1
+            }
+        );
     }
 
     #[test]
     fn too_old_or_unknown() {
         assert!(matches!(step("3.9.22"), Plan::Manual(_)));
         assert!(matches!(
-            plan(Some("8.5.1(tasmota32)"), None, true),
+            plan(Some("8.5.1(tasmota32)"), None, true, None),
             Plan::Manual(_)
         ));
-        assert_eq!(plan(None, None, false), Plan::Unknown);
+        assert_eq!(plan(None, None, false, None), Plan::Unknown);
     }
 
     #[test]
@@ -663,6 +790,7 @@ mod tests {
             Some("9.1.0(lite)"),
             Some("http://ota.tasmota.com/tasmota/release-9.1.0/tasmota-lite.bin.gz"),
             false,
+            Some("16.0.0"),
         );
         assert_eq!(
             p,
@@ -675,7 +803,7 @@ mod tests {
         // Its own OtaUrl is kept.
         let own = "http://ota.tasmota.com/tasmota/release/tasmota-sensors.bin.gz";
         assert_eq!(
-            plan(Some("15.0.1(sensors)"), Some(own), false),
+            plan(Some("15.0.1(sensors)"), Some(own), false, Some("16.0.0")),
             Plan::Final {
                 set_url: None,
                 index: 1,
@@ -687,6 +815,7 @@ mod tests {
             Some("9.2.0(sensors)"),
             Some("http://thehackbox.org/tasmota/release/tasmota.bin"),
             false,
+            Some("16.0.0"),
         );
         assert_eq!(
             p,

@@ -922,6 +922,7 @@ impl Store {
             d.version.as_deref(),
             d.ota_url.as_deref(),
             crate::ota::is_esp32(d),
+            targets.release.as_deref(),
         );
         let (target, step) = match plan {
             crate::ota::Plan::Step {

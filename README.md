@@ -27,6 +27,8 @@ Derust does it for you, one confirmed step at a time:
   Tasmota will go through its minimal image first;
 - it follows every restart and checks the version, then offers the next step; if a step
   fails, upgrading again continues from wherever the device is;
+- devices older than 10.0 also stop at **16.0.0** once a newer release is out: it is the last
+  release that still migrates their settings (newer ones skip those steps);
 - one device at a time, with read-only mode as the safety lock.
 
 <img src="docs/upgrade-path/img/s1-1-dialog.png" width="520" alt="The upgrade dialog for a device on 6.7.1: step 1 of the path, image, free flash check">
@@ -90,7 +92,8 @@ GitHub the first time you open a SetOptions window. Nothing about you or your de
   "Up to date" instead of the button; a device being upgraded stays in the list while it
   restarts.
 - **Upgrade path for old firmware** (ESP8266, [see it on a real device](docs/upgrade-path/README.md)): from 4.2.0 up, the official steps
-  5.14.0 → 6.7.1 → 7.2.0 → 8.5.1 → 9.1 → latest, one confirmed step at a time. Before each
+  5.14.0 → 6.7.1 → 7.2.0 → 8.5.1 → 9.1 → latest, one confirmed step at a time (with a stop at
+  16.0.0 before any newer release, the last one that migrates settings older than 10.0). Before each
   step the free flash is checked against the image size (Tasmota goes through its
   `-minimal` image by itself when needed), `.gz` images are used only from 8.2 on, and the
   version is verified after the restart. If a step fails, upgrading again continues from

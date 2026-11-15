@@ -6,6 +6,8 @@ A real ESP8266, flashed with **Tasmota 6.7.1**, upgraded to **16.0.0** with Tasm
 - **Network**: the user's own MQTT broker. Commands were sent only to this device (topic `test`); read-only mode was off only for it.
 - **Screenshots**: Tasmota Derust's web page in a headless browser, filtered to this one device and showing only the first three columns of the Firmware view (Device, Version, Update), and the upgrade dialog on its own. One screenshot is taken at every change of state; each step was started as soon as the previous one had finished.
 
+Since this run Tasmota Derust adds one more stop for devices older than 10.0: **16.0.0**, the last release that still migrates their settings, before any newer release. Here 16.0.0 was the latest release, so the path is the same.
+
 ## Summary
 
 | Step | From | To | Image (OtaUrl set by the app) | Free flash checked | Time |
