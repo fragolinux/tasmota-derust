@@ -65,4 +65,4 @@ When a device comes online the app sends `Status 0`, `Module`, and (until known)
 - MQTT over TLS, multiple brokers/sites in one window.
 - Forget/remove stale devices (clear retained discovery/LWT).
 - Web: login/password, live push (SSE) instead of polling, Home Assistant add-on / Docker image.
-- Installers, macOS notarization, Windows code signing (applied to SignPath Foundation).
+- Installers, macOS notarization, Windows code signing.

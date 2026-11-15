@@ -9,9 +9,30 @@ which is no longer maintained. Tasmota Derust is an independent rewrite (no code
 and is not affiliated with the Tasmota project.
 
 - [Download](#download)
-- [Features](#features-v01) · [Screenshots](#screenshots)
+- **[Upgrade very old Tasmota, safely](#upgrade-very-old-tasmota-safely)**: a [recorded run on a real device](docs/upgrade-path/README.md)
+- [Features](#features) · [Screenshots](#screenshots)
 - [Desktop app](#desktop-app) · [Web version](#web-version) · [Android app](#android-app)
 - **Building, development, releases**: see [DEVELOPMENT.md](DEVELOPMENT.md)
+
+## Upgrade very old Tasmota, safely
+
+Devices still on old firmware (6.x, 7.x, 8.x) can't jump straight to the latest release:
+Tasmota requires its [upgrade path](https://tasmota.github.io/docs/Upgrading/#upgrade-flow),
+5.14 → 6.7.1 → 7.2.0 → 8.5.1 → 9.1 → latest, with the right image at each step. Tasmota
+Derust does it for you, one confirmed step at a time:
+
+- it sets the official image for each step (old devices often still point at dead OtaUrls),
+  `.bin` until 8.2 and `.gz` after;
+- before each step it checks the free flash against the image size, and tells you when
+  Tasmota will go through its minimal image first;
+- it follows every restart and checks the version, then offers the next step; if a step
+  fails, upgrading again continues from wherever the device is;
+- one device at a time, with read-only mode as the safety lock.
+
+<img src="docs/upgrade-path/img/s1-1-dialog.png" width="520" alt="The upgrade dialog for a device on 6.7.1: step 1 of the path, image, free flash check">
+
+**[See the whole run on a real ESP8266](docs/upgrade-path/README.md)**: 6.7.1 to 16.0.0
+in four steps and under three minutes, with a screenshot of every state and the full log.
 
 ## Download
 
@@ -36,18 +57,6 @@ Every archive and disk image contains the licenses, its Trivy vulnerability repo
 (`TRIVY-REPORT.txt`) and `SHA256SUMS` of the files inside. The release also has `SHA256SUMS`
 of the downloads and `security-reports.zip` (all reports and SBOMs, see
 [Releases and CI](DEVELOPMENT.md#releases-and-ci)).
-
-### Code signing policy
-
-Windows releases use free code signing provided by [SignPath.io](https://about.signpath.io),
-certificate by [SignPath Foundation](https://signpath.org) (application in progress: until it
-is approved, the Windows executables are not signed).
-
-- Committers and reviewers: [fragolinux](https://github.com/fragolinux)
-- Approvers: [fragolinux](https://github.com/fragolinux)
-
-Every signed file is built by the `release.yml` workflow from this repository, and every
-signing request is approved by hand.
 
 ### Privacy
 
@@ -79,7 +88,7 @@ upgrade step. Nothing about you or your devices is sent anywhere.
   time**, with a confirmation and progress tracking. Devices already up to date show
   "Up to date" instead of the button; a device being upgraded stays in the list while it
   restarts.
-- **Upgrade path for old firmware** (ESP8266): from 4.2.0 up, the official steps
+- **Upgrade path for old firmware** (ESP8266, [see it on a real device](docs/upgrade-path/README.md)): from 4.2.0 up, the official steps
   5.14.0 → 6.7.1 → 7.2.0 → 8.5.1 → 9.1 → latest, one confirmed step at a time. Before each
   step the free flash is checked against the image size (Tasmota goes through its
   `-minimal` image by itself when needed), `.gz` images are used only from 8.2 on, and the
