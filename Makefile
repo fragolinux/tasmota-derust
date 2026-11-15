@@ -41,17 +41,22 @@ JAVA_HOME    ?= /Applications/Android Studio.app/Contents/jbr/Contents/Home
 export JAVA_HOME
 BUILD_TOOLS   = $(lastword $(sort $(wildcard $(ANDROID_HOME)/build-tools/*)))
 
-# APK signing: the release key when it exists (password from DERUST_KEYSTORE_PASSWORD,
-# or asked by apksigner), otherwise Android Studio's debug key.
+# APK signing: the release key when it exists, otherwise Android Studio's debug key.
+# Release key password: DERUST_KEYSTORE_PASSWORD, else the macOS Keychain item
+# $(KEYCHAIN_SERVICE) (see DEVELOPMENT.md), else apksigner asks for it.
 RELEASE_KEYSTORE ?= $(HOME)/.android/tasmota-derust-release.jks
 RELEASE_KEY_ALIAS ?= tasmota-derust
+KEYCHAIN_SERVICE ?= tasmota-derust-keystore
 ifneq ($(wildcard $(RELEASE_KEYSTORE)),)
   KEYSTORE  := $(RELEASE_KEYSTORE)
   KEY_ALIAS := $(RELEASE_KEY_ALIAS)
-  SIGN_PASS := $(if $(DERUST_KEYSTORE_PASSWORD),--ks-pass env:DERUST_KEYSTORE_PASSWORD --key-pass env:DERUST_KEYSTORE_PASSWORD,)
+  # Shell: the password goes into DERUST_KEYSTORE_PASSWORD, never onto a command line.
+  GET_PASS  := DERUST_KEYSTORE_PASSWORD="$${DERUST_KEYSTORE_PASSWORD:-$$(security find-generic-password -s $(KEYCHAIN_SERVICE) -w 2>/dev/null || true)}"; export DERUST_KEYSTORE_PASSWORD;
+  SIGN_PASS := $$([ -n "$$DERUST_KEYSTORE_PASSWORD" ] && echo --ks-pass env:DERUST_KEYSTORE_PASSWORD --key-pass env:DERUST_KEYSTORE_PASSWORD)
 else
   KEYSTORE  := $(HOME)/.android/debug.keystore
   KEY_ALIAS := androiddebugkey
+  GET_PASS  :=
   SIGN_PASS := --ks-pass pass:android --key-pass pass:android
 endif
 
@@ -121,7 +126,7 @@ apk:
 	@mkdir -p $(APK_DIR)
 	"$(BUILD_TOOLS)/zipalign" -f -p 4 \
 		android/app/build/outputs/apk/release/app-release-unsigned.apk $(APK_DIR)/aligned.apk
-	"$(JAVA_HOME)/bin/java" --enable-native-access=ALL-UNNAMED -jar "$(BUILD_TOOLS)/lib/apksigner.jar" \
+	$(GET_PASS) "$(JAVA_HOME)/bin/java" --enable-native-access=ALL-UNNAMED -jar "$(BUILD_TOOLS)/lib/apksigner.jar" \
 		sign --ks "$(KEYSTORE)" --ks-key-alias $(KEY_ALIAS) $(SIGN_PASS) \
 		--out $(APK_DIR)/tasmota-derust.apk $(APK_DIR)/aligned.apk
 	@rm -f $(APK_DIR)/aligned.apk $(APK_DIR)/*.idsig

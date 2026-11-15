@@ -12,8 +12,14 @@
 # then. Majors are always explicit. An explicit version (also `0.2.0-rc1`) overrides the
 # commits, e.g. to release a patch after a `feat` committed by mistake.
 #
+# Never waits for a person halfway: every secret is checked at the start.
+#   - APK key password: DERUST_KEYSTORE_PASSWORD, else the macOS Keychain item
+#     "tasmota-derust-keystore" (one-time setup in DEVELOPMENT.md); checked against the keystore.
+#   - GPG: a test signature first (pinentry-mac fills the passphrase in from the Keychain
+#     when "Save in Keychain" was ticked once).
+#
 # Steps, stopping at the first failure:
-#   1. on main, clean tree, not behind origin/main, tag not taken
+#   1. on main, clean tree, not behind origin/main, tag not taken, signing keys usable
 #   2. cargo test, Trivy source scan (vulnerabilities + secrets, as security.yml),
 #      actionlint, official Gradle wrapper
 #   3. version bump in Cargo.toml + Cargo.lock, every target built (make), Trivy scan of the
@@ -100,6 +106,29 @@ git rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "tag $tag already e
 if [ "$(printf '%s\n%s\n' "${last#v}" "${next%%-*}" | sort -V | tail -1)" != "${next%%-*}" ] ||
     { [ "${next%%-*}" = "${last#v}" ] && [[ "$next" == *-* ]]; }; then
     die "$next is not newer than $last"
+fi
+
+# ------------------------------------------------------------------- signing keys
+step "Signing keys"
+gpgkey=$(git config user.signingkey || true)
+[ -n "$gpgkey" ] || die "git user.signingkey is not set"
+echo test | gpg --quiet --local-user "$gpgkey" --clearsign > /dev/null ||
+    die "GPG cannot sign with $gpgkey (passphrase not available?)"
+echo "GPG $gpgkey: ok"
+
+ks=$HOME/.android/tasmota-derust-release.jks
+if [ -f "$ks" ]; then
+    if [ -z "${DERUST_KEYSTORE_PASSWORD:-}" ]; then
+        DERUST_KEYSTORE_PASSWORD=$(security find-generic-password -s tasmota-derust-keystore -w 2>/dev/null) ||
+            die "APK key password not found: set DERUST_KEYSTORE_PASSWORD or add it to the Keychain (DEVELOPMENT.md)"
+    fi
+    export DERUST_KEYSTORE_PASSWORD
+    keytool="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}/bin/keytool"
+    "$keytool" -list -keystore "$ks" -storepass:env DERUST_KEYSTORE_PASSWORD > /dev/null 2>&1 ||
+        die "the APK key password does not open $ks"
+    echo "APK key: ok"
+else
+    echo "warning: $ks not found, the APK will be signed with the debug key" >&2
 fi
 
 # ------------------------------------------------------------------- 2. source checks

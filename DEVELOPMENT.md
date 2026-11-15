@@ -245,6 +245,21 @@ Without `VERSION`, since the last tag pushed to origin: any `feat` makes a minor
 that is not a Conventional Commit, or a pre-release as last tag stop it: then give `VERSION`.
 Majors are never automatic.
 
+`make release` never stops halfway to ask for a password: it checks both signing keys first.
+One-time setup on the Mac:
+
+- APK key password into the login Keychain (it asks for the password twice, nothing is
+  shown or saved elsewhere); `make apk` and `make release` read it from there:
+
+  ```
+  security add-generic-password -s tasmota-derust-keystore -a tasmota-derust -w
+  ```
+
+  To change it later, add `-U` to the same command. `DERUST_KEYSTORE_PASSWORD`, when set,
+  still wins.
+- GPG passphrase: the next time pinentry-mac asks for it, tick *Save in Keychain*; from
+  then on commits and tags are signed without asking.
+
 `make release` stops at the first failure: on `main`, clean tree, not behind `origin/main`;
 `cargo test`; Trivy source scan (as `security.yml`); `actionlint`; official Gradle wrapper;
 version bump in `Cargo.toml` (`[workspace.package]`, the Android app reads it too) and
