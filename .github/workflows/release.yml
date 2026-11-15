@@ -4,6 +4,10 @@
 #
 #   check -> build + Trivy scan + pack (macOS, Linux + Windows, Android) -> reports -> release
 #
+# Windows executables are built with MSVC on a Windows runner (static C runtime, version
+# resource): antivirus heuristics flag MinGW-built Rust executables far more often. The
+# Linux job scans and packs them together with the Linux files.
+#
 # Each build job runs `make package`: it scans what goes into every release file and packs
 # it only if the scan passes (a fixable HIGH or CRITICAL vulnerability stops the release),
 # with the licenses, the Trivy report and SHA256SUMS inside. The summary goes into the
@@ -87,9 +91,46 @@ jobs:
           path: dist/security/
           if-no-files-found: ignore
 
-  linux-windows:
-    name: Build Linux and Windows
+  windows:
+    name: Build Windows (MSVC)
     needs: check
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Tools
+        run: cargo install --locked cargo-auditable
+      - name: Build
+        run: |
+          cargo auditable build --locked --profile dist --target x86_64-pc-windows-msvc \
+            -p tasmota-derust -p tasmota-derust-web
+          mkdir -p dist/windows
+          cp target/x86_64-pc-windows-msvc/dist/tasmota-derust.exe \
+             target/x86_64-pc-windows-msvc/dist/tasmota-derust-web.exe dist/windows/
+      - name: Smoke test (web server)
+        run: |
+          dist/windows/tasmota-derust-web.exe --help
+          # Static C runtime: no Visual C++ Redistributable DLL may be imported.
+          if grep -qai 'vcruntime1[0-9]*\.dll' dist/windows/*.exe; then
+            echo "::error::The executables import the Visual C++ runtime (static CRT not applied)."
+            exit 1
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-exe
+          path: dist/windows/*.exe
+          if-no-files-found: error
+
+  linux-windows:
+    name: Build Linux, pack Linux and Windows
+    needs: [check, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -99,11 +140,9 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-          rustup target add x86_64-pc-windows-gnu x86_64-unknown-linux-gnu
-      - name: mingw-w64 and zig
+          rustup target add x86_64-unknown-linux-gnu
+      - name: zig
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq --no-install-recommends gcc-mingw-w64-x86-64
           f="zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
           curl -fsSLO "https://ziglang.org/download/${ZIG_VERSION}/$f"
           echo "${ZIG_SHA256}  $f" | sha256sum -c -
@@ -114,7 +153,11 @@ jobs:
       - name: Tools
         run: cargo install --locked cargo-auditable cargo-zigbuild
       - name: Build
-        run: make linux windows
+        run: make linux
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-exe
+          path: dist/windows
       - name: Smoke test (Linux web server)
         run: |
           DERUST_MQTT_HOST=127.0.0.1 DERUST_MQTT_PORT=1 \
@@ -250,7 +293,7 @@ jobs:
 
   release:
     name: Publish the release
-    needs: [check, macos, linux-windows, android, scan]
+    needs: [check, macos, windows, linux-windows, android, scan]
     if: github.ref_type == 'tag' && !cancelled() && !failure()
     runs-on: ubuntu-latest
     permissions:

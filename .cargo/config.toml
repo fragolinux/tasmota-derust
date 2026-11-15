@@ -1,0 +1,4 @@
+# Windows release builds (MSVC, see release.yml): link the C runtime statically, so the
+# executables run without the Visual C++ Redistributable installed.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -210,7 +210,9 @@ GitHub Actions (`.github/workflows/`):
   scan above. It fails on committed secrets and on HIGH/CRITICAL vulnerabilities that have a
   fix. Nothing is built.
 - **Release** (`release.yml`), only when a version tag is pushed: builds macOS, Linux, Windows
-  and the APK, smoke-tests the Linux web server, scans what goes into each release file
+  and the APK (Windows with MSVC on a Windows runner, static C runtime: antivirus heuristics
+  flag MinGW-built Rust executables much more often; `make windows` keeps MinGW for local
+  tries), smoke-tests the Linux web server, scans what goes into each release file
   with Trivy, packs it (report and checksums inside), and only then publishes the GitHub
   release. A failing scan stops it before anything is published. The scan summary goes into
   the release notes; all reports and SBOMs are attached as `security-reports.zip`.
