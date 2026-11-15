@@ -1,0 +1,12 @@
+[package]
+name = "tasmota-derust-web"
+description = "A modern manager for Tasmota devices (web server)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tasmota-derust-core.workspace = true
+serde.workspace = true
+axum = "0.8.9"
+tokio = { version = "1.54.1", features = ["rt", "macros", "net", "sync"] }

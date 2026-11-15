@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/desktop", "crates/web", "crates/mobile", "crates/uniffi-bindgen"]
+# `cargo run` at the root starts the desktop app.
+default-members = ["crates/desktop"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+tasmota-derust-core = { path = "crates/core" }
+tasmota-derust-web = { path = "crates/web" }
+crossbeam-channel = "0.5.17"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[profile.release]
+# Smaller binaries, mostly for the Android library.
+lto = "thin"
+strip = "debuginfo"
+
+# Distribution builds (`make`): smallest binaries. Speed is irrelevant for this app.
+[profile.dist]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Android library: same, but panics must unwind so UniFFI can turn them into exceptions,
+# and symbols stay in: UniFFI reads them to generate the Kotlin bindings. The Android
+# Gradle plugin strips the libraries when it packages the APK.
+[profile.dist-mobile]
+inherits = "dist"
+panic = "unwind"
+strip = "debuginfo"

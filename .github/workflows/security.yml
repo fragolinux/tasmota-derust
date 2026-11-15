@@ -1,0 +1,73 @@
+# Security analysis on every push and pull request (and weekly, for newly published
+# advisories). Nothing is built or released here: see release.yml for that.
+name: Security
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TRIVY_VERSION: "0.76.2"
+  TRIVY_SHA256: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+
+jobs:
+  trivy:
+    name: Trivy (dependencies and secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Trivy
+        run: |
+          f="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSLO "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/$f"
+          echo "${TRIVY_SHA256}  $f" | sha256sum -c -
+          sudo tar -xzf "$f" -C /usr/local/bin trivy
+          trivy --version
+
+      - name: Cache the vulnerability database
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ github.run_id }}
+          restore-keys: trivy-db-
+
+      # Cargo.lock (every Rust crate of every front end), android/app/gradle.lockfile (the
+      # APK's Java/Kotlin libraries) and committed secrets.
+      - name: Scan
+        run: |
+          trivy fs --quiet --scanners vuln,secret --format table --output trivy.txt .
+          trivy fs --quiet --scanners vuln,secret --format sarif --output trivy.sarif .
+          {
+            echo '## Trivy'
+            echo '```'
+            cat trivy.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat trivy.txt
+          # Fail on secrets and on HIGH/CRITICAL vulnerabilities that have a fix.
+          trivy fs --quiet --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 --format table . > /dev/null
+
+      - name: Keep the reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trivy-report
+          path: |
+            trivy.txt
+            trivy.sarif
+          if-no-files-found: ignore

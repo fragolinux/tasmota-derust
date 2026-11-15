@@ -1,0 +1,9 @@
+# Same line endings on every system (the repository is used from macOS and Windows).
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files
+*.png binary
+*.webp binary
+*.jar binary

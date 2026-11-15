@@ -1,0 +1,23 @@
+[package]
+name = "tasmota-derust"
+description = "A modern manager for Tasmota devices (desktop app)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tasmota-derust-core.workspace = true
+tasmota-derust-web.workspace = true
+chrono = "0.4.45"
+crossbeam-channel.workspace = true
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "wayland", "x11"] }
+egui = "0.37.0"
+egui_extras = "0.37.0"
+env_logger = "0.11.11"
+open = "5.4.5"
+serde_json.workspace = true
+png = { version = "0.18.1", optional = true }
+
+[features]
+# Development only: DERUST_SCREENSHOTS=<dir> saves a PNG of each screen (README images).
+screenshots = ["dep:png"]

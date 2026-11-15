@@ -1,0 +1,14 @@
+[package]
+name = "tasmota-derust-core"
+description = "Shared core of Tasmota Derust: device model, MQTT connection, settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+crossbeam-channel.workspace = true
+directories = "6.0.0"
+rumqttc = { version = "0.25.1", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+ureq = { version = "3.5.2", features = ["json"] }

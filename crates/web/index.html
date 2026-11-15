@@ -1,0 +1,743 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Tasmota Derust</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --panel-2: #f0f1f4; --text: #1d1f23; --muted: #6b7079;
+  --border: #dde0e5; --accent: #1f7ae0; --link: #1667c4;
+  --green: #7cc042; --yellow: #f2c21b; --red: #e04b3c; --orange: #f08c1e; --gray: #b0b0b0;
+  --radius: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15171a; --panel: #1e2125; --panel-2: #262a2f; --text: #e6e8eb; --muted: #9aa0a8;
+    --border: #33383e; --accent: #3d8fe8; --link: #6aaef5;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+button { font: inherit; color: inherit; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+header { position: sticky; top: 0; z-index: 10; background: var(--panel);
+  border-bottom: 1px solid var(--border); padding: 8px 16px; padding-top: max(8px, env(safe-area-inset-top)); }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.brand { font-weight: 700; font-size: 16px; margin-right: 8px; }
+.conn { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--gray); display: inline-block; }
+.spacer { flex: 1; }
+.tabs { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; margin-top: 8px; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { border: 0; background: transparent; padding: 6px 12px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.tab.active { background: var(--accent); color: #fff; }
+.controls { margin-top: 8px; }
+.btn { border: 1px solid var(--border); background: var(--panel-2); padding: 5px 10px; border-radius: 6px; cursor: pointer; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.warn { background: var(--orange); color: #111; border-color: var(--orange); }
+input[type=search] { border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  padding: 5px 10px; border-radius: 6px; min-width: 0; width: 180px; font: inherit; }
+label.check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+.info { color: var(--muted); font-size: 13px; display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.chip { display: inline-block; min-width: 20px; padding: 0 5px; border-radius: 4px; text-align: center;
+  color: #111; font-weight: 600; font-size: 12px; line-height: 18px; }
+.chip.gray { background: var(--gray); }
+
+details.menu { position: relative; }
+details.menu > summary { list-style: none; }
+details.menu > summary::-webkit-details-marker { display: none; }
+.menu-body { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; background: var(--panel);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; max-height: 60vh; overflow: auto;
+  box-shadow: 0 6px 24px rgba(0,0,0,.25); min-width: 200px; }
+.menu-body label { display: flex; gap: 8px; padding: 3px 0; cursor: pointer; }
+
+.banner { margin: 10px 16px 0; padding: 8px 12px; border-radius: var(--radius); background: var(--panel-2);
+  border-left: 4px solid var(--orange); }
+main { padding: 12px 16px 40px; }
+.empty { color: var(--muted); text-align: center; padding: 48px 0; }
+
+/* Table */
+.table-wrap { overflow: auto; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  max-height: calc(100vh - 170px); }
+table { border-collapse: separate; border-spacing: 0; width: 100%; }
+th, td { padding: 5px 10px; white-space: nowrap; border-bottom: 1px solid var(--border); text-align: left; }
+th { position: sticky; top: 0; background: var(--panel-2); z-index: 2; cursor: pointer; user-select: none; font-weight: 600; }
+th.sorted::after { content: attr(data-arrow); margin-left: 4px; font-size: 10px; }
+td.num, th.num { text-align: right; }
+th:first-child, td:first-child { position: sticky; left: 0; background: var(--panel); z-index: 1; }
+th:first-child { z-index: 3; background: var(--panel-2); }
+tbody tr:nth-child(even) td { background: var(--panel-2); }
+tbody tr.offline td { color: var(--muted); }
+tbody tr.offline td:first-child { font-style: italic; }
+.devname { display: inline-flex; align-items: center; gap: 8px; }
+.rssi { display: inline-block; min-width: 44px; text-align: center; border-radius: 4px; color: #111; font-weight: 600; }
+.relays { display: inline-flex; gap: 4px; }
+.relay { min-width: 30px; height: 26px; border-radius: 5px; border: 1px solid var(--border);
+  background: var(--panel-2); cursor: pointer; font-weight: 600; }
+.relay.on { background: var(--green); border-color: var(--green); color: #111; }
+.relay:disabled { opacity: .45; cursor: default; }
+.ap { display: inline-flex; gap: 3px; border: 0; background: none; padding: 0; }
+button.ap { cursor: pointer; }
+.ver-old { color: var(--orange); font-weight: 700; }
+.up-state { margin-left: 8px; }
+.up-done { color: var(--green); } .up-failed { color: var(--red); }
+.spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--muted); border-top-color: transparent;
+  border-radius: 50%; animation: spin 1s linear infinite; vertical-align: -2px; margin-right: 4px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.offx { display: inline-flex; width: 14px; height: 14px; border-radius: 50%; background: var(--red); color: #fff;
+  font-size: 10px; align-items: center; justify-content: center; font-style: normal; }
+
+/* ---------------------------------------------------------------- phone layout */
+.m-only { display: none !important; }
+[hidden] { display: none !important; }
+.ro-tag { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; background: var(--orange); color: #111; }
+.icon-btn { border: 0; background: transparent; padding: 6px; border-radius: 8px; cursor: pointer; color: var(--text);
+  display: inline-flex; align-items: center; justify-content: center; }
+.icon-btn:active { background: var(--panel-2); }
+.icon-btn svg { width: 20px; height: 20px; }
+
+.mtools { gap: 8px; align-items: center; margin-top: 8px; }
+.mtools input[type=search] { flex: 1; width: auto; height: 34px; font-size: 15px; border-radius: 9px; }
+.pill { border: 1px solid var(--border); background: var(--panel-2); height: 34px; padding: 0 10px; border-radius: 9px;
+  cursor: pointer; white-space: nowrap; font-size: 13px; }
+.pill.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+select.pill { appearance: none; -webkit-appearance: none; color: var(--text); max-width: 108px; text-overflow: ellipsis; }
+.minfo { color: var(--muted); font-size: 12.5px; margin: 8px 4px 6px; gap: 12px; flex-wrap: wrap; align-items: center; }
+
+.mlist { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.mrow { display: flex; align-items: center; gap: 10px; padding: 7px 10px 7px 12px; min-height: 54px;
+  border-bottom: 1px solid var(--border); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.mrow:last-child { border-bottom: 0; }
+.mrow:active { background: var(--panel-2); }
+.mrow.offline { opacity: .55; }
+.mrow .mid { flex: 1; min-width: 0; }
+.mname, .msub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mname { font-weight: 600; font-size: 15px; }
+.msub { color: var(--muted); font-size: 12.5px; margin-top: 1px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.mright { display: flex; align-items: center; gap: 6px; flex-shrink: 0; font-size: 13px; }
+.mright .relay { min-width: 46px; height: 32px; border-radius: 8px; font-size: 13px; }
+.mright .rssi { min-width: 34px; font-size: 12px; line-height: 18px; }
+.mval { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.bnav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; background: var(--panel);
+  border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); }
+.bnav button { flex: 1; border: 0; background: none; padding: 7px 0 6px; display: flex; flex-direction: column;
+  align-items: center; gap: 2px; font-size: 10.5px; color: var(--muted); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.bnav button svg { width: 22px; height: 22px; }
+.bnav button.active { color: var(--accent); font-weight: 600; }
+
+/* Device sheet */
+dialog.sheet { margin: auto 0 0; width: 100%; max-width: 100%; max-height: 88vh; padding: 0; border: 0;
+  border-radius: 16px 16px 0 0; overflow: hidden; }
+.sheet-inner { max-height: 88vh; overflow: auto; padding: 6px 16px calc(16px + env(safe-area-inset-bottom)); }
+.grabber { width: 36px; height: 5px; border-radius: 3px; background: var(--border); margin: 0 auto 10px; }
+.sheet-head { display: flex; align-items: center; gap: 10px; }
+.sheet-head h3 { margin: 0; flex: 1; min-width: 0; font-size: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.card-relays { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.card-relays .relay { flex: 1; min-width: 64px; max-width: 120px; height: 44px; font-size: 15px; border-radius: 10px; }
+.sheet-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+.sheet-actions .btn { height: 36px; padding: 0 12px; display: inline-flex; align-items: center; }
+.sheet h4 { margin: 18px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+dialog dl.kv { display: block; background: var(--panel-2); border-radius: 10px; margin: 0; }
+.kv > div { display: flex; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
+.kv > div:last-child { border-bottom: 0; }
+.kv dt { color: var(--muted); flex-shrink: 0; white-space: nowrap; }
+dialog .kv dd { margin: 0 0 0 auto; text-align: right; word-break: normal; overflow-wrap: anywhere; }
+
+dialog { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text);
+  max-width: min(520px, calc(100vw - 32px)); padding: 18px; }
+dialog::backdrop { background: rgba(0,0,0,.5); }
+dialog h3 { margin: 0 0 10px; }
+dialog dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0 0 10px; }
+dialog dt { color: var(--muted); } dialog dd { margin: 0; word-break: break-all; }
+.warn-text { color: var(--orange); }
+.dlg-buttons { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.dlg-buttons .primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+#toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--text); color: var(--bg);
+  padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
+#toast.show { opacity: .95; }
+
+@media (max-width: 760px) {
+  .d-only { display: none !important; }
+  .m-only { display: flex !important; }
+  .m-only[hidden] { display: none !important; }
+  html, body { font-size: 15px; }
+  header { padding: 6px 12px 8px; padding-top: max(6px, env(safe-area-inset-top)); }
+  .brand { font-size: 17px; margin-right: 2px; }
+  main { padding: 0 8px calc(72px + env(safe-area-inset-bottom)); }
+  .empty { padding: 64px 0; }
+  #toast { bottom: calc(72px + env(safe-area-inset-bottom)); }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <span class="brand">Tasmota Derust</span>
+    <span class="conn"><span class="dot" id="dot"></span><span id="connText">Connecting…</span></span>
+    <span class="ro-tag m-only" id="roTag" hidden role="button" title="Why can't I switch anything?">Read-only</span>
+    <span class="spacer"></span>
+    <span class="info d-only" id="viewInfo"></span>
+    <button class="icon-btn m-only" id="mRefresh" title="Ask every online device for its full status" aria-label="Refresh">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+    </button>
+  </div>
+  <div class="mtools m-only">
+    <input type="search" id="msearch" placeholder="Search" autocomplete="off" enterkeyhint="search">
+    <button class="pill" id="mOffline">Offline</button>
+    <select class="pill" id="msort" aria-label="Sort by"></select>
+  </div>
+  <nav class="tabs d-only" id="tabs"></nav>
+  <div class="row controls d-only">
+    <input type="search" id="search" placeholder="Search devices" autocomplete="off">
+    <label class="check"><input type="checkbox" id="showOffline"> Show offline</label>
+    <details class="menu" id="colsMenu">
+      <summary class="btn">Columns</summary>
+      <div class="menu-body" id="colsBody"></div>
+    </details>
+    <button class="btn" id="refresh" title="Ask every online device for its full status">Refresh</button>
+    <span class="spacer"></span>
+    <span class="info" id="counts"></span>
+  </div>
+</header>
+<div id="banner" class="d-only"></div>
+<main id="main"><div class="empty">Loading…</div></main>
+<nav class="bnav m-only" id="bnav"></nav>
+<dialog id="sheet" class="sheet"><div class="sheet-inner" id="sheetBody"></div></dialog>
+
+<dialog id="dlg">
+  <h3 id="dlgTitle"></h3>
+  <div id="dlgBody"></div>
+  <div class="dlg-buttons">
+    <button class="btn" id="dlgCancel">Cancel</button>
+    <button class="btn primary" id="dlgOk">OK</button>
+  </div>
+</dialog>
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------- columns
+const fmtDur = s => {
+  if (s == null) return "";
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  const p = n => String(n).padStart(2, "0");
+  return (d ? d + "d " : "") + p(h) + ":" + p(m) + ":" + p(x);
+};
+// Compact duration for phone rows: "13d 2h", "5h 12m", "4m".
+const fmtShort = s => {
+  if (s == null) return "";
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+};
+
+const COLS = {
+  power:          { t: "Power" },
+  telemetry:      { t: "Telemetry" },
+  module:         { t: "Module" },
+  uptime:         { t: "Uptime", num: true, fmt: fmtDur },
+  load_avg:       { t: "LoadAvg", num: true },
+  link_count:     { t: "LinkCount", num: true },
+  boot_count:     { t: "BootCount", num: true },
+  restart_reason: { t: "RestartReason" },
+  sleep:          { t: "Sleep", num: true },
+  mqtt_count:     { t: "MqttCount", num: true },
+  downtime:       { t: "Downtime", num: true, fmt: fmtDur },
+  rssi:           { t: "RSSI", num: true },
+  version_short:  { t: "Version" },
+  core:           { t: "Core" },
+  sdk:            { t: "SDK" },
+  program_size:   { t: "ProgramSize", num: true },
+  free:           { t: "Free", num: true },
+  ota_url:        { t: "OtaUrl" },
+  update:         { t: "Update" },
+  hostname:       { t: "Hostname" },
+  mac:            { t: "Mac" },
+  ip:             { t: "IPAddress" },
+  gateway:        { t: "Gateway" },
+  ssid:           { t: "SSId" },
+  ap:             { t: "AP", num: true },
+  bssid:          { t: "BSSId" },
+  channel:        { t: "Channel", num: true },
+  topic:          { t: "Topic" },
+  full_topic:     { t: "FullTopic" },
+  cmnd_topic:     { t: "CommandTopic" },
+  stat_topic:     { t: "StatTopic" },
+  tele_topic:     { t: "TeleTopic" },
+  fallback_topic: { t: "FallbackTopic" },
+  group_topic:    { t: "GroupTopic" },
+};
+const VIEWS = {
+  home:     { t: "Home",     cols: ["power", "telemetry", "module", "uptime", "rssi"] },
+  health:   { t: "Health",   cols: ["uptime", "boot_count", "restart_reason", "load_avg", "sleep", "mqtt_count", "link_count", "downtime", "rssi"] },
+  firmware: { t: "Firmware", cols: ["version_short", "core", "sdk", "program_size", "free", "ota_url", "update"] },
+  wifi:     { t: "Wifi",     cols: ["hostname", "mac", "ip", "gateway", "ssid", "ap", "bssid", "channel", "rssi", "link_count", "downtime"] },
+  mqtt:     { t: "MQTT",     cols: ["topic", "full_topic", "cmnd_topic", "stat_topic", "tele_topic", "fallback_topic", "group_topic"] },
+};
+
+// ---------------------------------------------------------------- prefs (per browser)
+const store = {
+  get(k, def) { try { const v = localStorage.getItem("derust." + k); return v == null ? def : JSON.parse(v); } catch { return def; } },
+  set(k, v) { try { localStorage.setItem("derust." + k, JSON.stringify(v)); } catch {} },
+};
+const ui = {
+  view: store.get("view", "home"),
+  showOffline: store.get("showOffline", false),
+  sort: store.get("sort", { col: null, desc: false }),
+  search: "",
+};
+if (!VIEWS[ui.view]) ui.view = "home";
+const visibleCols = v => {
+  const saved = store.get("cols." + v, null);
+  return Array.isArray(saved) ? saved.filter(c => COLS[c]) : VIEWS[v].cols.slice();
+};
+
+let data = null;
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const narrow = window.matchMedia("(max-width: 760px)");
+
+// ---------------------------------------------------------------- helpers
+const rssiColor = r => r >= 85 ? "var(--green)" : r >= 50 ? "var(--yellow)" : "var(--red)";
+
+function bars(d) {
+  if (d.online === false) return `<span class="offx" title="offline">✕</span>`;
+  const r = d.rssi;
+  const level = r == null ? 0 : r >= 75 ? 4 : r >= 50 ? 3 : r >= 25 ? 2 : 1;
+  const color = r == null ? "var(--gray)" : rssiColor(r);
+  let s = `<svg width="16" height="14" viewBox="0 0 16 14" aria-hidden="true">`;
+  for (let i = 0; i < 4; i++) {
+    const h = 4 + i * 3;
+    s += `<rect x="${i * 4}" y="${14 - h}" width="3" height="${h}" rx=".5" fill="${i < level ? color : "var(--gray)"}" opacity="${i < level ? 1 : .35}"/>`;
+  }
+  return s + "</svg>";
+}
+
+function nameHtml(d) {
+  if (d.online !== false && d.web_url)
+    return `<a href="${esc(d.web_url)}" target="_blank" rel="noopener" title="Open web UI">${esc(d.name)}</a>`;
+  return esc(d.name);
+}
+
+// words: label a single relay ON/OFF instead of "1" (phone rows and sheet).
+function relaysHtml(d, words = false) {
+  const dis = d.online !== true ? "disabled" : "";
+  const single = words && d.power.length === 1;
+  return d.power.map((p, i) => {
+    const st = p === true ? "ON" : p === false ? "OFF" : "unknown";
+    const label = single ? (p === true ? "ON" : p === false ? "OFF" : "?") : i + 1;
+    return `<button class="relay ${p ? "on" : ""}" data-act="power" data-topic="${esc(d.topic)}" data-n="${i + 1}" ${dis}
+      title="Relay ${i + 1}: ${st}">${label}</button>`;
+  }).join("");
+}
+
+function apHtml(d) {
+  if (d.ap == null || d.online === false) return "";
+  const two = !!(data.ssids[1]);
+  const n = two ? 2 : 1;
+  let chips = "";
+  for (let k = 1; k <= n; k++)
+    chips += `<span class="chip" style="background:${k === d.ap ? "var(--green)" : "var(--red)"}">${k}</span>`;
+  const can = two && d.online === true;
+  const other = d.ap === 1 ? 2 : 1;
+  const tip = two ? `Connected to SSId ${d.ap} (${data.ssids[d.ap - 1] ?? "?"}). Switch to SSId ${other} (${data.ssids[other - 1] ?? "?"})`
+                  : `Connected to SSId ${d.ap}`;
+  return can ? `<button class="ap" data-act="ap" data-topic="${esc(d.topic)}" data-n="${other}" title="${esc(tip)}">${chips}</button>`
+             : `<span class="ap" title="${esc(tip)}">${chips}</span>`;
+}
+
+function updateHtml(d) {
+  const busy = d.upgrade && ["sent", "progress", "restarting"].includes(d.upgrade.state);
+  let h = "";
+  if (!busy) {
+    const dis = d.online !== true ? "disabled" : "";
+    h += `<button class="btn ${d.outdated ? "warn" : ""}" data-act="upgrade" data-topic="${esc(d.topic)}" ${dis}
+      title="${d.outdated ? "A newer release is available" : "Upgrade from OtaUrl"}">Upgrade…</button>`;
+  }
+  if (d.upgrade) {
+    const u = d.upgrade;
+    const cls = u.state === "done" ? "up-done" : u.state === "failed" ? "up-failed" : "";
+    h += `<span class="up-state ${cls}" title="${esc(u.text)}">${busy ? '<span class="spin"></span>' : ""}${esc(u.text)}</span>`;
+  }
+  return h;
+}
+
+function cellHtml(d, c) {
+  const off = d.online === false;
+  switch (c) {
+    case "power": return `<span class="relays">${relaysHtml(d)}</span>`;
+    case "telemetry": {
+      if (!d.telemetry) return "";
+      const tip = d.sensor ? JSON.stringify(d.sensor, null, 1).slice(0, 1500) : "";
+      return `<span title="${esc(tip)}">${esc(d.telemetry)}</span>`;
+    }
+    case "rssi": return d.rssi == null || off ? "" : `<span class="rssi" style="background:${rssiColor(d.rssi)}">${d.rssi}</span>`;
+    case "ap": return apHtml(d);
+    case "update": return updateHtml(d);
+    case "version_short":
+      if (d.outdated && !off) return `<span class="ver-old" title="${esc(d.version)} — latest release is ${esc(data.latest)}">${esc(d.version_short)}</span>`;
+      return `<span title="${esc(d.version)}">${esc(d.version_short)}</span>`;
+    default: {
+      const v = d[c];
+      if (v == null) return "";
+      const f = COLS[c].fmt ? COLS[c].fmt(v) : v;
+      return esc(f);
+    }
+  }
+}
+
+const sortValue = (d, c) => {
+  if (!c) return d.name.toLowerCase();
+  if (c === "power") return d.power.filter(p => p).length;
+  if (c === "telemetry") return d.telemetry ? parseFloat(d.telemetry) : null;
+  if (c === "version_short") return d.version_short ? d.version_short.split(".").map(n => n.padStart(5, "0")).join(".") : null;
+  const v = d[c];
+  return typeof v === "string" ? v.toLowerCase() : v;
+};
+
+function visibleDevices() {
+  const q = ui.search.trim().toLowerCase();
+  const list = data.devices.filter(d =>
+    (ui.showOffline || d.online !== false) &&
+    (!q || [d.name, d.topic, d.ip, d.hostname, d.module].some(x => x && x.toLowerCase().includes(q))));
+  const { col, desc } = ui.sort;
+  list.sort((a, b) => {
+    let x = sortValue(a, col), y = sortValue(b, col), r;
+    if (x == null && y == null) r = 0; else if (x == null) r = 1; else if (y == null) r = -1;
+    else r = x < y ? -1 : x > y ? 1 : 0;
+    if (desc && x != null && y != null) r = -r;
+    return r || a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+  });
+  return list;
+}
+
+// ---------------------------------------------------------------- render
+function renderHeader() {
+  $("tabs").innerHTML = Object.entries(VIEWS).map(([k, v]) =>
+    `<button class="tab ${k === ui.view ? "active" : ""}" data-view="${k}">${v.t}</button>`).join("");
+  $("showOffline").checked = ui.showOffline;
+  const cols = visibleCols(ui.view);
+  $("colsBody").innerHTML = `<div style="font-weight:600;margin-bottom:4px">Columns in ${VIEWS[ui.view].t}</div>` +
+    Object.entries(COLS).map(([k, c]) =>
+      `<label><input type="checkbox" data-col="${k}" ${cols.includes(k) ? "checked" : ""}> ${c.t}</label>`).join("") +
+    `<div style="margin-top:6px"><button class="btn" id="colsReset">Reset to defaults</button></div>`;
+  renderMobileChrome();
+}
+
+function render() {
+  if (!data) return;
+  // Connection
+  $("dot").style.background = data.connected ? "var(--green)" : "var(--red)";
+  $("connText").textContent = data.connected ? `Connected to ${data.broker}` : `Disconnected: ${data.status}`;
+  const online = data.devices.filter(d => d.online === true).length;
+  const offline = data.devices.filter(d => d.online === false).length;
+  $("counts").textContent = `${data.devices.length} devices · ${online} online · ${offline} offline`;
+  $("banner").innerHTML = data.read_only
+    ? `<div class="banner">Read-only mode: you can look, but relays, Wi-Fi switching and upgrades are disabled. ${esc(data.read_only_hint || "")}</div>` : "";
+
+  // Per-view info
+  let info = "";
+  if (ui.view === "wifi")
+    info = data.ssids.map((s, i) => `<span><span class="chip gray">${i + 1}</span> ${esc(s ?? "?")}</span>`).join("");
+  else if (ui.view === "firmware")
+    info = data.latest ? `<a href="https://github.com/arendst/Tasmota/releases/latest" target="_blank" rel="noopener">Latest release: ${esc(data.latest)}</a>`
+         : data.latest_error ? `<span style="color:var(--red)" title="${esc(data.latest_error)}">Latest release unknown</span>` : "Checking latest release…";
+  $("viewInfo").innerHTML = info;
+
+  // Phone header bits
+  if (narrow.matches) {
+    $("connText").textContent = data.connected ? "Connected" : "Disconnected";
+    $("connText").title = data.connected ? data.broker : data.status;
+  }
+  $("roTag").hidden = !data.read_only;
+  const mo = $("mOffline");
+  mo.textContent = `Offline ${offline}`;
+  mo.classList.toggle("on", ui.showOffline);
+  if ($("sheet").open) renderSheet();
+
+  const list = visibleDevices();
+  const main = $("main");
+  if (!list.length) {
+    main.innerHTML = (narrow.matches && info ? `<div class="minfo m-only">${info}</div>` : "") +
+      `<div class="empty">${data.connected ? (data.devices.length ? "No devices match." : "Waiting for Tasmota devices…") : "Not connected to the MQTT broker."}</div>`;
+    return;
+  }
+  if (narrow.matches) { main.innerHTML = renderMobile(list); return; }
+
+  const prev = main.querySelector(".table-wrap");
+  const scroll = prev ? [prev.scrollLeft, prev.scrollTop] : null;
+  main.innerHTML = renderTable(list);
+  if (scroll) { const w = main.querySelector(".table-wrap"); w.scrollLeft = scroll[0]; w.scrollTop = scroll[1]; }
+}
+
+function renderTable(list) {
+  const cols = visibleCols(ui.view);
+  const arrow = c => ui.sort.col === c ? `class="${COLS[c]?.num ? "num " : ""}sorted" data-arrow="${ui.sort.desc ? "▼" : "▲"}"` : (COLS[c]?.num ? `class="num"` : "");
+  let h = `<div class="table-wrap"><table><thead><tr>`;
+  h += `<th data-sort="" ${ui.sort.col == null ? `class="sorted" data-arrow="${ui.sort.desc ? "▼" : "▲"}"` : ""}>Device</th>`;
+  for (const c of cols) h += `<th data-sort="${c}" ${arrow(c)}>${COLS[c].t}</th>`;
+  h += `</tr></thead><tbody>`;
+  for (const d of list) {
+    h += `<tr class="${d.online === false ? "offline" : ""}"><td><span class="devname">${bars(d)}${nameHtml(d)}</span></td>`;
+    for (const c of cols) h += `<td class="${COLS[c].num && !["rssi", "ap"].includes(c) ? "num" : ""}">${cellHtml(d, c)}</td>`;
+    h += `</tr>`;
+  }
+  return h + `</tbody></table></div>`;
+}
+
+// ---------------------------------------------------------------- phone layout
+const ICONS = {
+  home: `<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>`,
+  health: `<path d="M3 12h4l3-8 4 16 3-8h4"/>`,
+  firmware: `<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>`,
+  wifi: `<path d="M2 9a15 15 0 0 1 20 0"/><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor"/>`,
+  mqtt: `<path d="M4 7h13l-3-3M20 17H7l3 3"/>`,
+};
+const svg = p => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
+const rssiChip = d => d.rssi == null || d.online === false ? "" : `<span class="rssi" style="background:${rssiColor(d.rssi)}">${d.rssi}</span>`;
+
+// What a phone row shows for each view: one muted line under the name, and a short value on the right.
+function rowParts(d) {
+  if (d.online === false) return { sub: ["Offline", d.module].filter(Boolean).join(" · "), right: "" };
+  const v = s => `<span class="mval">${esc(s)}</span>`;
+  switch (ui.view) {
+    case "health": return {
+      sub: [d.restart_reason, d.boot_count != null ? `${d.boot_count} boots` : null].filter(Boolean).join(" · "),
+      right: v(fmtShort(d.uptime)) + rssiChip(d) };
+    case "firmware": {
+      const busy = d.upgrade && ["sent", "progress", "restarting"].includes(d.upgrade.state);
+      const st = d.upgrade ? `<span class="${d.upgrade.state === "done" ? "up-done" : d.upgrade.state === "failed" ? "up-failed" : ""}">${busy ? '<span class="spin"></span>' : ""}</span>` : "";
+      return { sub: [d.module, d.core ? "core " + d.core : null].filter(Boolean).join(" · "), right: st + cellHtml(d, "version_short") };
+    }
+    case "wifi": return {
+      sub: [d.ip, d.ssid].filter(Boolean).join(" · "),
+      right: apHtml(d) + rssiChip(d) };
+    case "mqtt": return { sub: `<span class="mono">${esc(d.full_topic ?? "")}</span>`, raw: true, right: `<span class="mval mono">${esc(d.topic)}</span>` };
+    default: return {
+      sub: [d.module, d.telemetry || (d.uptime != null ? "up " + fmtShort(d.uptime) : null)].filter(Boolean).join(" · "),
+      right: relaysHtml(d, true) };
+  }
+}
+
+function renderMobile(list) {
+  const info = $("viewInfo").innerHTML;
+  return (info ? `<div class="minfo m-only">${info}</div>` : `<div style="height:8px"></div>`) +
+    `<div class="mlist">` + list.map(d => {
+      const p = rowParts(d);
+      return `<div class="mrow ${d.online === false ? "offline" : ""}" data-topic="${esc(d.topic)}">
+        ${bars(d)}
+        <div class="mid"><div class="mname">${esc(d.name)}</div><div class="msub">${p.raw ? p.sub : esc(p.sub)}</div></div>
+        <div class="mright">${p.right}</div></div>`;
+    }).join("") + `</div>`;
+}
+
+function renderMobileChrome() {
+  $("bnav").innerHTML = Object.entries(VIEWS).map(([k, v]) =>
+    `<button class="${k === ui.view ? "active" : ""}" data-view="${k}">${svg(ICONS[k])}<span>${v.t}</span></button>`).join("");
+  const opts = [["", "Name"], ...VIEWS[ui.view].cols.filter(c => !["update", "power"].includes(c)).map(c => [c, COLS[c].t])];
+  if (!opts.some(([k]) => k === (ui.sort.col ?? ""))) opts.push([ui.sort.col, COLS[ui.sort.col]?.t ?? ui.sort.col]);
+  $("msort").innerHTML = opts.map(([k, t]) =>
+    `<option value="${k}" ${k === (ui.sort.col ?? "") ? "selected" : ""}>↕ ${esc(t)}</option>`).join("");
+}
+
+// Bottom sheet with everything about one device, plus its actions.
+let sheetTopic = null;
+const SECTIONS = [
+  ["Status", ["module", "uptime", "telemetry", "restart_reason", "boot_count", "load_avg", "sleep", "mqtt_count"]],
+  ["Firmware", ["version_short", "core", "sdk", "program_size", "free", "ota_url"]],
+  ["Network", ["ip", "hostname", "mac", "gateway", "ssid", "ap", "bssid", "channel", "rssi", "link_count", "downtime"]],
+  ["MQTT", ["topic", "full_topic", "cmnd_topic", "stat_topic", "tele_topic", "fallback_topic", "group_topic"]],
+];
+
+function sheetValue(d, c) {
+  if (c === "ap") return d.ap == null ? "" : `SSId ${d.ap}` + (data.ssids[d.ap - 1] ? ` (${esc(data.ssids[d.ap - 1])})` : "");
+  if (c === "version_short") return d.version == null ? "" :
+    `<span class="${d.outdated && d.online !== false ? "ver-old" : ""}">${esc(d.version)}</span>`;
+  if (c === "rssi") return rssiChip(d);
+  if (c === "telemetry") return esc(d.telemetry ?? "");
+  return cellHtml(d, c);
+}
+
+function renderSheet() {
+  const d = byTopic(sheetTopic);
+  if (!d) { $("sheet").close(); return; }
+  const off = d.online === false;
+  const two = !!data.ssids[1];
+  let h = `<div class="grabber"></div>
+    <div class="sheet-head">${bars(d)}<h3>${esc(d.name)}</h3><button class="btn" id="sheetClose">Done</button></div>
+    <div class="sheet-sub">${off ? "Offline" : d.online ? "Online" : "Unknown"}${d.module ? " · " + esc(d.module) : ""}</div>`;
+  if (d.power.length) h += `<div class="card-relays">${relaysHtml(d, true)}</div>`;
+  h += `<div class="sheet-actions">`;
+  if (!off && d.web_url) h += `<a class="btn" href="${esc(d.web_url)}" target="_blank" rel="noopener">Open web UI</a>`;
+  if (two && d.ap != null && !off) {
+    const other = d.ap === 1 ? 2 : 1;
+    h += `<button class="btn" data-act="ap" data-topic="${esc(d.topic)}" data-n="${other}" ${d.online !== true ? "disabled" : ""}>Switch to SSId ${other}</button>`;
+  }
+  h += updateHtml(d) + `</div>`;
+  for (const [title, cols] of SECTIONS) {
+    const rows = cols.map(c => [c, sheetValue(d, c)]).filter(([, v]) => v !== "");
+    if (!rows.length) continue;
+    h += `<h4>${title}</h4><dl class="kv">` +
+      rows.map(([c, v]) => `<div><dt>${COLS[c].t}</dt><dd>${v}</dd></div>`).join("") + `</dl>`;
+  }
+  const body = $("sheetBody"), top = body.scrollTop;
+  body.innerHTML = h;
+  body.scrollTop = top;
+}
+
+function openSheet(topic) {
+  sheetTopic = topic;
+  renderSheet();
+  $("sheetBody").scrollTop = 0;
+  $("sheet").showModal();
+}
+
+// ---------------------------------------------------------------- dialogs
+function confirmDialog(title, bodyHtml, okLabel) {
+  return new Promise(resolve => {
+    const dlg = $("dlg");
+    $("dlgTitle").textContent = title;
+    $("dlgBody").innerHTML = bodyHtml;
+    $("dlgOk").textContent = okLabel;
+    const done = v => { dlg.close(); $("dlgOk").onclick = $("dlgCancel").onclick = dlg.oncancel = null; resolve(v); };
+    $("dlgOk").onclick = () => done(true);
+    $("dlgCancel").onclick = () => done(false);
+    dlg.oncancel = e => { e.preventDefault(); done(false); };
+    dlg.showModal();
+  });
+}
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("show"), 3500);
+}
+
+async function post(url) {
+  try {
+    const r = await fetch(url, { method: "POST" });
+    if (!r.ok) toast(await r.text() || `Error ${r.status}`);
+  } catch (e) { toast("Server not reachable"); }
+  setTimeout(load, 400);
+}
+
+const byTopic = t => data.devices.find(d => d.topic === t);
+const versionTuple = v => (v || "").split("(")[0].split(".").map(n => parseInt(n, 10) || 0);
+
+function readOnlyNotice() {
+  toast(`Read-only mode is on: nothing was sent. ${data.read_only_hint || ""}`.trim());
+}
+
+async function onAction(btn) {
+  const t = btn.dataset.topic, d = byTopic(t);
+  if (!d) return;
+  if (data.read_only) return readOnlyNotice();
+  const base = `/api/devices/${encodeURIComponent(t)}`;
+  if (btn.dataset.act === "power") return post(`${base}/power/${btn.dataset.n}`);
+
+  if (btn.dataset.act === "ap") {
+    const to = +btn.dataset.n, from = d.ap;
+    const ok = await confirmDialog(`Switch ${d.name} to SSId ${to}?`,
+      `<p>Now connected to SSId ${from} (${esc(data.ssids[from - 1] ?? "?")}).</p>
+       <p>It will restart and connect to SSId ${to} (${esc(data.ssids[to - 1] ?? "?")}).</p>
+       <p style="color:var(--muted)">If it cannot connect there, Tasmota tries the other network again.</p>`,
+      "Restart and switch");
+    if (ok) post(`${base}/ap/${to}`);
+    return;
+  }
+
+  if (btn.dataset.act === "upgrade") {
+    const v = versionTuple(d.version);
+    const old = v[0] < 9 || (v[0] === 9 && v[1] < 1);
+    let body = `<dl>
+      <dt>Topic</dt><dd>${esc(d.topic)}</dd>
+      <dt>Current firmware</dt><dd>${esc(d.version ?? "unknown")}</dd>
+      <dt>Latest release</dt><dd>${esc(data.latest ?? "unknown")}</dd>
+      <dt>OtaUrl</dt><dd>${esc(d.ota_url ?? "unknown")}</dd></dl>
+      <p>The device downloads the firmware from its OtaUrl and restarts. Do not power it off during the upgrade.</p>`;
+    if (old) body += `<p class="warn-text">This firmware is old. Tasmota needs intermediate upgrade steps for old versions;
+      upgrading straight to the latest release can fail.
+      <a href="https://tasmota.github.io/docs/Upgrading/#upgrade-flow" target="_blank" rel="noopener">Tasmota upgrade path</a></p>`;
+    if (d.ota_url && !d.ota_url.includes("ota.tasmota.com")) body += `<p class="warn-text">This device uses a custom OtaUrl.</p>`;
+    const ok = await confirmDialog(`Upgrade ${d.name}?`, body, "Upgrade");
+    if (ok) post(`${base}/upgrade`);
+  }
+}
+
+// ---------------------------------------------------------------- events
+document.addEventListener("click", e => {
+  const tab = e.target.closest("[data-view]");
+  if (tab) {
+    ui.view = tab.dataset.view; store.set("view", ui.view); $("colsMenu").open = false;
+    renderHeader(); render(); if (narrow.matches) window.scrollTo(0, 0); return;
+  }
+  if (e.target.id === "sheetClose") { $("sheet").close(); return; }
+  const th = e.target.closest("th[data-sort]");
+  if (th) {
+    const c = th.dataset.sort || null;
+    if (ui.sort.col === c) ui.sort.desc = !ui.sort.desc; else ui.sort = { col: c, desc: false };
+    store.set("sort", ui.sort); render(); return;
+  }
+  const act = e.target.closest("[data-act]");
+  if (act && !act.disabled) { onAction(act); return; }
+  // Tapping a phone row opens its sheet, but not when the tap was on a relay, AP chips or a link.
+  const row = e.target.closest(".mrow[data-topic]");
+  if (row && !e.target.closest("button, a, .ap")) { openSheet(row.dataset.topic); return; }
+  if (e.target.id === "colsReset") { store.set("cols." + ui.view, null); renderHeader(); render(); return; }
+  const menu = $("colsMenu");
+  if (menu.open && !menu.contains(e.target)) menu.open = false;
+});
+$("colsBody").addEventListener("change", e => {
+  const c = e.target.dataset.col; if (!c) return;
+  let cols = visibleCols(ui.view);
+  if (e.target.checked) { if (!cols.includes(c)) cols.push(c); } else cols = cols.filter(x => x !== c);
+  store.set("cols." + ui.view, cols); render();
+});
+$("showOffline").addEventListener("change", e => { ui.showOffline = e.target.checked; store.set("showOffline", ui.showOffline); render(); });
+$("search").addEventListener("input", e => { ui.search = e.target.value; render(); });
+$("refresh").addEventListener("click", () => post("/api/refresh"));
+$("mRefresh").addEventListener("click", () => { toast("Asking devices for status…"); post("/api/refresh"); });
+$("msearch").addEventListener("input", e => { ui.search = e.target.value; $("search").value = ui.search; render(); });
+$("search").addEventListener("input", e => { $("msearch").value = e.target.value; });
+$("roTag").addEventListener("click", readOnlyNotice);
+$("mOffline").addEventListener("click", () => {
+  ui.showOffline = !ui.showOffline; store.set("showOffline", ui.showOffline); $("showOffline").checked = ui.showOffline; render();
+});
+$("msort").addEventListener("change", e => {
+  const c = e.target.value || null;
+  // Numbers read best biggest-first (uptime, RSSI, boots); text A→Z.
+  ui.sort = { col: c, desc: !!(c && COLS[c]?.num) };
+  store.set("sort", ui.sort); render();
+});
+// Tap on the dimmed area above the sheet closes it.
+$("sheet").addEventListener("click", e => { if (e.target === $("sheet")) $("sheet").close(); });
+narrow.addEventListener("change", () => { renderHeader(); render(); });
+
+async function load() {
+  try {
+    const r = await fetch("/api/state", { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    data = await r.json();
+  } catch (e) {
+    $("dot").style.background = "var(--red)";
+    $("connText").textContent = "Server not reachable";
+    return;
+  }
+  // Don't redraw under an open dialog or menu.
+  if (!$("dlg").open && !$("colsMenu").open) render();
+}
+
+renderHeader();
+load();
+setInterval(load, 2000);
+</script>
+</body>
+</html>

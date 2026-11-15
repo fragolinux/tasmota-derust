@@ -1,0 +1,23 @@
+/target
+.DS_Store
+
+# Android
+/android/.idea/
+/android/.kotlin/
+/android/app/src/main/jniLibs/
+
+# Distribution builds (make)
+/dist/
+
+# Never commit signing keys or credentials (the APK key lives in ~/.android/, see README)
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+.env
+.env.*
+
+# Editors
+/.idea/
+/.vscode/

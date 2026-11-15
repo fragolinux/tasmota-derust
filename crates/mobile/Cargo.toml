@@ -1,0 +1,14 @@
+[package]
+name = "tasmota-derust-mobile"
+description = "Tasmota Derust core for the Android app (UniFFI bindings)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "tasmota_derust_mobile"
+
+[dependencies]
+tasmota-derust-core.workspace = true
+uniffi = "0.32.2"

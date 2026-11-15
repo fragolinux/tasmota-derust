@@ -1,0 +1,19 @@
+# Weekly update PRs. The GitHub Actions are pinned to commit SHAs, so this is what keeps
+# them current. Android libraries are not included: their versions are pinned in
+# android/app/gradle.lockfile, which needs `make lock-android` after an update.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      rust:
+        update-types: [minor, patch]
