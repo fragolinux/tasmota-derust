@@ -142,6 +142,8 @@ pub struct Device {
     pub upgrade: Option<Upgrade>,
     /// `StatusLOG.SetOption` registers (see `setoption::decode`); empty until reported.
     pub set_options: Vec<String>,
+    /// This device's SSId1 / SSId2 (`StatusLOG.SSId`, or the answer to `SSId<n>`).
+    pub ssids: [Option<String>; 2],
 }
 
 impl Device {
@@ -416,6 +418,19 @@ impl Device {
             set_str(&mut self.gateway, s, "Gateway");
             set_str(&mut self.mac, s, "Mac");
         }
+        if let Some(list) = v
+            .get("StatusLOG")
+            .and_then(|s| s.get("SSId"))
+            .and_then(Value::as_array)
+        {
+            for (i, slot) in self.ssids.iter_mut().enumerate() {
+                *slot = list
+                    .get(i)
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+            }
+        }
         if let Some(regs) = v
             .get("StatusLOG")
             .and_then(|s| s.get("SetOption"))
@@ -488,6 +503,7 @@ impl Device {
         for (i, slot) in ssids.iter_mut().enumerate() {
             if let Some(s) = v.get(format!("SSId{}", i + 1)).and_then(Value::as_str) {
                 *slot = Some(s.to_string());
+                self.ssids[i] = Some(s.to_string()).filter(|s| !s.is_empty());
             }
         }
         if let Some(gt) = v

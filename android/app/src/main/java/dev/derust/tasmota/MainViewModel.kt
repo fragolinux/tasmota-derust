@@ -6,6 +6,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.derust.tasmota.core.BackupException
+import dev.derust.tasmota.core.BackupFile
 import dev.derust.tasmota.core.Broker
 import dev.derust.tasmota.core.CommandException
 import dev.derust.tasmota.core.Options
@@ -27,6 +29,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Owns the Rust [Session] (MQTT connection + device store) and polls it once a second
@@ -164,6 +167,50 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** `SetOption<n> <value>`; the options are read back afterwards. */
     fun setOption(topic: String, n: Int, value: Long) =
         command("SetOption$n $value sent") { it.setOption(topic, n.toUShort(), value.toUInt()) }
+
+    /** Sets the Wi-Fi network the device is NOT using; the device restarts once. */
+    fun setWifi(topic: String, slot: Int, ssid: String, password: String) =
+        command("SSId$slot sent: the device restarts") { it.setWifi(topic, slot.toUByte(), ssid, password) }
+
+    /** Outcome of a backup or restore, for the screen. */
+    sealed interface FileResult<out T> {
+        data class Ok<T>(val value: T) : FileResult<T>
+        /** The device's web interface has a password (or the one given was wrong). */
+        data class NeedsPassword(val wrong: Boolean) : FileResult<Nothing>
+        data class Error(val message: String) : FileResult<Nothing>
+    }
+
+    private suspend fun <T> files(block: (Session) -> T): FileResult<T> = withContext(Dispatchers.IO) {
+        val s = session.value ?: return@withContext FileResult.Error("Not connected")
+        try {
+            FileResult.Ok(block(s))
+        } catch (e: BackupException.NeedsPassword) {
+            FileResult.NeedsPassword(false)
+        } catch (e: BackupException.WrongPassword) {
+            FileResult.NeedsPassword(true)
+        } catch (e: BackupException.Failed) {
+            FileResult.Error(e.reason)
+        } catch (e: BackupException.NoAddress) {
+            FileResult.Error("The device's IP address is not known yet.")
+        } catch (e: BackupException) {
+            FileResult.Error("Failed")
+        } catch (e: IllegalStateException) {
+            FileResult.Error("Not connected")
+        }
+    }
+
+    /** The device's whole configuration (.dmp) from its web server. Allowed in read-only. */
+    suspend fun backup(topic: String, password: String?): FileResult<BackupFile> =
+        files { it.backup(topic, password) }
+
+    /** Uploads a configuration file; the device restarts with it. Never in read-only. */
+    suspend fun restore(topic: String, password: String?, data: ByteArray): FileResult<Unit> {
+        if (readOnly) {
+            readOnlyHit()
+            return FileResult.Error("Read-only mode is on: nothing was sent.")
+        }
+        return files { it.restore(topic, password, data) }
+    }
 
     /** Tells the user that read-only is on (used before asking for a confirmation, too). */
     fun readOnlyHit() {

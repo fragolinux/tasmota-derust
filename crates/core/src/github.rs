@@ -115,6 +115,61 @@ pub struct Changelog {
     /// Release page on GitHub.
     pub url: String,
     pub sections: Vec<ChangelogSection>,
+    /// The release's files, with the platform each one is for.
+    pub downloads: Vec<Download>,
+}
+
+/// One file of a release.
+#[derive(serde::Serialize, Clone, Debug, Default, PartialEq)]
+pub struct Download {
+    pub name: String,
+    pub url: String,
+    /// "windows", "macos", "linux", "android" for the app; "web-windows", "web-macos",
+    /// "web-linux" for the web server; "" for the others (checksums, reports).
+    pub platform: String,
+}
+
+/// The platform a release file is for, from its name (see `Download::platform`).
+pub fn asset_platform(name: &str) -> &'static str {
+    let n = name.to_ascii_lowercase();
+    let web = n.starts_with("tasmota-derust-web-");
+    let os = if n.ends_with(".apk") {
+        return "android";
+    } else if n.contains("windows") {
+        "windows"
+    } else if n.contains("macos") {
+        "macos"
+    } else if n.contains("linux") {
+        "linux"
+    } else {
+        return "";
+    };
+    match (web, os) {
+        (false, os) => os,
+        (true, "windows") => "web-windows",
+        (true, "macos") => "web-macos",
+        (true, _) => "web-linux",
+    }
+}
+
+/// The platform this program runs on, as in `Download::platform` (desktop app).
+pub fn this_platform() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "android") {
+        "android"
+    } else {
+        "linux"
+    }
+}
+
+impl Changelog {
+    /// The file to download for `platform`, when the release has one.
+    pub fn download_for(&self, platform: &str) -> Option<&Download> {
+        self.downloads.iter().find(|d| d.platform == platform)
+    }
 }
 
 #[derive(serde::Serialize, Clone, Debug, Default, PartialEq)]
@@ -154,10 +209,28 @@ pub fn changelog(version: &str) -> Result<Changelog, String> {
         .unwrap_or_else(|| {
             format!("https://github.com/fragolinux/tasmota-derust/releases/tag/v{version}")
         });
+    let downloads = v
+        .get("assets")
+        .and_then(|a| a.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| {
+                    let name = x.get("name")?.as_str()?.to_string();
+                    let url = x.get("browser_download_url")?.as_str()?.to_string();
+                    Some(Download {
+                        platform: asset_platform(&name).to_string(),
+                        name,
+                        url,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let c = Changelog {
         version: version.clone(),
         url: page,
         sections: parse_changes(body),
+        downloads,
     };
     cache.lock().unwrap().insert(version, c.clone());
     Ok(c)
@@ -219,6 +292,20 @@ mod tests {
         assert_eq!(c[0].items, vec!["A", "B"]);
         assert_eq!(c[1].items, vec!["C"]);
         assert!(parse_changes("## Downloads\n- x").is_empty());
+    }
+
+    #[test]
+    fn release_files() {
+        let p = asset_platform;
+        assert_eq!(p("tasmota-derust-0.4.0-windows-x64.zip"), "windows");
+        assert_eq!(p("tasmota-derust-0.4.0-macos-arm64.dmg"), "macos");
+        assert_eq!(p("tasmota-derust-0.4.0-linux-x64.tar.gz"), "linux");
+        assert_eq!(p("tasmota-derust-0.4.0.apk"), "android");
+        assert_eq!(p("tasmota-derust-web-0.4.0-windows-x64.zip"), "web-windows");
+        assert_eq!(p("tasmota-derust-web-0.4.0-macos-arm64.zip"), "web-macos");
+        assert_eq!(p("tasmota-derust-web-0.4.0-linux-x64.tar.gz"), "web-linux");
+        assert_eq!(p("SHA256SUMS"), "");
+        assert_eq!(p("security-reports.zip"), "");
     }
 
     #[test]

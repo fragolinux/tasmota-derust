@@ -1,10 +1,12 @@
 package dev.derust.tasmota.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -96,6 +98,17 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
     var refreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    val context = LocalContext.current
+    val appVersion = remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull()
+    }
+    // Release notes shown for this version (the running one, or the available update).
+    var showNotes by remember { mutableStateOf<String?>(null) }
+    showNotes?.let { v -> ChangelogDialog(v, onClose = { showNotes = null }) }
+
+    val files = rememberDeviceFiles(vm)
+    var wifiTopic by rememberSaveable { mutableStateOf<String?>(null) }
+
     // null: hidden; true: a command was blocked; false: the lock was tapped.
     var askUnlock by remember { mutableStateOf<Boolean?>(null) }
 
@@ -107,7 +120,23 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             TopAppBar(
                 title = {
                     Column {
-                        Text("Tasmota Derust", fontWeight = FontWeight.SemiBold, fontSize = 20.sp)
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text("Tasmota Derust", fontWeight = FontWeight.SemiBold, fontSize = 20.sp, maxLines = 1)
+                            appVersion?.let { v ->
+                                Text(
+                                    " $v", fontSize = 13.sp, maxLines = 1,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.clickable { showNotes = v },
+                                )
+                            }
+                            snap?.appUpdate?.let { v ->
+                                Text(
+                                    "  Update $v", fontSize = 13.sp, maxLines = 1, color = Orange,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.clickable { showNotes = v },
+                                )
+                            }
+                        }
                         ConnectionLine(snap?.connected, snap?.status, vm.readOnly)
                     }
                 },
@@ -191,6 +220,9 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             onCt = { vm.setCt(open.topic, it) },
             onWhite = { vm.setWhite(open.topic, it) },
             onOptions = { vm.openOptions(open.topic) },
+            onWifi = { wifiTopic = open.topic },
+            onBackup = { files.backup(open) },
+            onRestore = { files.restore(open) },
             readOnly = vm.readOnly,
             onReadOnly = vm::readOnlyHit,
         )
@@ -208,6 +240,16 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             onClose = { vm.openOptions(null) },
             onSet = { n, v -> vm.setOption(optDevice.topic, n, v) },
             onReadOnly = vm::readOnlyHit,
+            onBackup = { files.backup(optDevice) },
+        )
+    }
+    val wifiDevice = s?.devices?.firstOrNull { it.topic == wifiTopic }
+    if (wifiTopic != null && wifiDevice != null) {
+        WifiDialog(
+            wifiDevice, readOnly = vm.readOnly,
+            onDismiss = { wifiTopic = null },
+            onReadOnly = vm::readOnlyHit,
+            onSave = { slot, ssid, pw -> vm.setWifi(wifiDevice.topic, slot, ssid, pw) },
         )
     }
 

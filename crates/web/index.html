@@ -185,9 +185,20 @@ dialog dt { color: var(--muted); } dialog dd { margin: 0; word-break: break-all;
 .warn-text { color: var(--orange); }
 .dlg-buttons { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .dlg-buttons .primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+a.btn.primary { display: inline-block; background: var(--accent); color: #fff; border-color: var(--accent); text-decoration: none; }
 #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--text); color: var(--bg);
   padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
 #toast.show { opacity: .95; }
+
+/* Device tools, Wi-Fi, password */
+.tools { display: grid; gap: 8px; }
+.tools .btn { text-align: left; padding: 8px 12px; }
+.hint { color: var(--muted); font-size: 12.5px; }
+.wifi-slot { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 8px 0; }
+.wifi-slot .use { color: var(--green); font-weight: 600; font-size: 12.5px; }
+.wifi-slot label { display: block; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+.wifi-slot input, #pwInput { width: 100%; border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  padding: 6px 8px; border-radius: 6px; font: inherit; margin-top: 3px; }
 
 /* SetOptions */
 dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding: 0; overflow: hidden; }
@@ -297,7 +308,9 @@ dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding
 <dialog id="optDlg">
   <div class="opt-wrap">
     <div class="opt-head">
-      <div class="row"><h3 id="optTitle"></h3><button class="btn" id="optClose">Done</button></div>
+      <div class="row"><h3 id="optTitle"></h3>
+        <button class="btn" id="optBackup" title="Download the device's whole configuration before changing risky options">Back up first</button>
+        <button class="btn" id="optClose">Done</button></div>
       <div class="row">
         <input type="search" id="optSearch" placeholder="Search (number or words)" autocomplete="off">
         <label class="check"><input type="checkbox" id="optChanged"> Only changed</label>
@@ -307,6 +320,30 @@ dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding
     <div class="opt-list" id="optList"></div>
   </div>
 </dialog>
+<dialog id="toolsDlg">
+  <h3 id="toolsTitle"></h3>
+  <div class="tools">
+    <button class="btn" data-tool="options">SetOptions</button>
+    <button class="btn" data-tool="wifi">Wi-Fi networks</button>
+    <button class="btn" data-tool="backup">Back up configuration</button>
+    <button class="btn" data-tool="restore">Restore configuration…</button>
+  </div>
+  <p class="hint">Backup and restore use the device's own web server (the same file as its
+    Configuration &gt; Backup / Restore pages).</p>
+  <div class="dlg-buttons"><button class="btn" id="toolsClose">Close</button></div>
+</dialog>
+<dialog id="wifiDlg">
+  <h3 id="wifiTitle"></h3>
+  <div id="wifiBody"></div>
+  <div class="dlg-buttons"><button class="btn" id="wifiClose">Close</button></div>
+</dialog>
+<dialog id="pwDlg">
+  <h3>Web password</h3>
+  <p id="pwText"></p>
+  <input type="password" id="pwInput" autocomplete="off" placeholder="Password of the device's web interface">
+  <div class="dlg-buttons"><button class="btn" id="pwCancel">Cancel</button><button class="btn primary" id="pwOk">OK</button></div>
+</dialog>
+<input type="file" id="restoreFile" accept=".dmp,application/octet-stream" hidden>
 <div id="toast"></div>
 
 <script>
@@ -612,7 +649,7 @@ function renderTable(list) {
   for (const c of cols) h += `<th data-sort="${c}" ${arrow(c)}>${COLS[c].t}</th>`;
   h += `</tr></thead><tbody>`;
   for (const d of list) {
-    h += `<tr class="${d.online === false ? "offline" : ""}" ${d.upgrading && d.online === false ? 'title="Upgrading: restarting…"' : ""}><td><span class="devname">${bars(d)}${nameHtml(d)}${d.has_options && !docMode.bare ? `<button class="gear" data-act="options" data-topic="${esc(d.topic)}" title="SetOptions" aria-label="SetOptions">⚙</button>` : ""}</span></td>`;
+    h += `<tr class="${d.online === false ? "offline" : ""}" ${d.upgrading && d.online === false ? 'title="Upgrading: restarting…"' : ""}><td><span class="devname">${bars(d)}${nameHtml(d)}${d.online !== false && !docMode.bare ? `<button class="gear" data-act="tools" data-topic="${esc(d.topic)}" title="SetOptions, Wi-Fi networks, backup" aria-label="Device tools">⚙</button>` : ""}</span></td>`;
     for (const c of cols) h += `<td class="${COLS[c].num && !["rssi", "ap"].includes(c) ? "num" : ""}">${cellHtml(d, c)}</td>`;
     h += `</tr>`;
   }
@@ -710,6 +747,9 @@ function renderSheet() {
     h += `<button class="btn" data-act="ap" data-topic="${esc(d.topic)}" data-n="${other}" ${d.online !== true ? "disabled" : ""}>Switch to SSId ${other}</button>`;
   }
   if (d.has_options) h += `<button class="btn" data-act="options" data-topic="${esc(d.topic)}">SetOptions</button>`;
+  if (!off) h += `<button class="btn" data-act="wifi" data-topic="${esc(d.topic)}">Wi-Fi networks</button>
+    <button class="btn" data-act="backup" data-topic="${esc(d.topic)}">Back up</button>
+    <button class="btn" data-act="restore" data-topic="${esc(d.topic)}">Restore</button>`;
   h += updateHtml(d) + `</div>`;
   for (const [title, cols] of SECTIONS) {
     const rows = cols.map(c => [c, sheetValue(d, c)]).filter(([, v]) => v !== "");
@@ -768,6 +808,10 @@ async function onAction(btn) {
   if (!d) return;
   if (btn.dataset.act === "light") return openLight(t);
   if (btn.dataset.act === "options") return openOptions(t);
+  if (btn.dataset.act === "tools") return openTools(t);
+  if (btn.dataset.act === "wifi") return openWifi(t);
+  if (btn.dataset.act === "backup") return backupDevice(t);
+  if (btn.dataset.act === "restore") return pickRestore(t);
   if (data.read_only) return readOnlyNotice();
   const base = `/api/devices/${encodeURIComponent(t)}`;
   if (btn.dataset.act === "power") return post(`${base}/power/${btn.dataset.n}`);
@@ -869,6 +913,24 @@ function hsvRgb(h, s, v) {
   return [f(5), f(3), f(1)];
 }
 
+// The system of this browser, as the release files name it (none for iPhone/iPad).
+function browserPlatform() {
+  const ua = navigator.userAgent;
+  if (/Android/i.test(ua)) return "android";
+  if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return "";
+  if (/Windows/i.test(ua)) return "windows";
+  if (/Macintosh|Mac OS X/i.test(ua)) return "macos";
+  if (/Linux|X11/i.test(ua)) return "linux";
+  return "";
+}
+
+function downloadHtml(c) {
+  const p = browserPlatform();
+  const d = p && (c.downloads || []).find(x => x.platform === p);
+  return d ? `<p><a class="btn primary" href="${esc(d.url)}" rel="noopener">Download ${esc(d.name)}</a></p>`
+    : `<p style="color:var(--muted)">No download for this system in this release.</p>`;
+}
+
 async function showChangelog(version) {
   let body;
   try {
@@ -878,7 +940,8 @@ async function showChangelog(version) {
     body = `<div class="changes">` + (c.sections.length ? c.sections.map(s =>
       `<h4>${esc(s.title)}</h4><ul>${s.items.map(i => `<li>${esc(i)}</li>`).join("")}</ul>`).join("")
       : "<p>No list of changes in these release notes.</p>") +
-      `<p><a href="${esc(c.url)}" target="_blank" rel="noopener">Release page on GitHub (downloads, full notes)</a></p></div>`;
+      downloadHtml(c) +
+      `<p><a href="${esc(c.url)}" target="_blank" rel="noopener">Release page on GitHub (all downloads, full notes)</a></p></div>`;
   } catch (err) {
     body = `<p class="warn-text">${esc(err.message || String(err))}</p>
       <p><a href="https://github.com/fragolinux/tasmota-derust/releases" target="_blank" rel="noopener">All releases</a></p>`;
@@ -948,7 +1011,7 @@ async function load() {
     return;
   }
   // Don't redraw under an open dialog or menu.
-  if (!$("dlg").open && !$("colsMenu").open) render();
+  if (!$("dlg").open && !$("colsMenu").open && !$("wifiDlg").open && !$("pwDlg").open) render();
   if ($("optDlg").open && !$("dlg").open) loadOptions();
   if (docMode.upgrade && !$("dlg").open && !load.docOpened) {
     const d = byTopic(docMode.upgrade);
@@ -1097,6 +1160,134 @@ $("optSearch").addEventListener("input", renderOptions);
 $("optChanged").addEventListener("change", renderOptions);
 $("optClose").addEventListener("click", () => $("optDlg").close());
 $("optDlg").addEventListener("close", () => { opt.topic = null; });
+
+// ---------------------------------------------------------------- device tools
+function openTools(topic) {
+  const d = byTopic(topic); if (!d) return;
+  $("toolsTitle").textContent = d.name;
+  const dlg = $("toolsDlg");
+  dlg.querySelector('[data-tool="options"]').disabled = !d.has_options;
+  dlg.querySelectorAll("[data-tool]").forEach(b => b.onclick = () => {
+    dlg.close();
+    ({ options: openOptions, wifi: openWifi, backup: backupDevice, restore: pickRestore })[b.dataset.tool](topic);
+  });
+  $("toolsClose").onclick = () => dlg.close();
+  dlg.showModal();
+}
+
+// Asks the device's web password; null when cancelled. Never stored.
+function askPassword(text) {
+  return new Promise(resolve => {
+    const dlg = $("pwDlg");
+    $("pwText").textContent = text; $("pwInput").value = "";
+    const done = v => { dlg.close(); $("pwOk").onclick = $("pwCancel").onclick = dlg.oncancel = null; resolve(v); };
+    $("pwOk").onclick = () => done($("pwInput").value);
+    $("pwCancel").onclick = () => done(null);
+    $("pwInput").onkeydown = e => { if (e.key === "Enter") done($("pwInput").value); };
+    dlg.oncancel = e => { e.preventDefault(); done(null); };
+    dlg.showModal(); $("pwInput").focus();
+  });
+}
+
+// Calls a backup/restore endpoint, asking the web password when the device wants one.
+async function withPassword(name, call) {
+  let pw = null;
+  for (;;) {
+    const r = await call(pw);
+    if (r.status !== 401) return r;
+    const msg = await r.text();
+    pw = await askPassword(`${name}: ${msg}`);
+    if (pw === null) return null;
+  }
+}
+
+async function backupDevice(topic) {
+  const d = byTopic(topic); if (!d) return;
+  toast(`Backing up ${d.name}…`);
+  let r;
+  try {
+    r = await withPassword(d.name, pw => fetch(`/api/devices/${encodeURIComponent(topic)}/backup`,
+      { method: "POST", headers: pw ? { "X-Web-Password": pw } : {} }));
+  } catch (e) { return toast("Server not reachable"); }
+  if (!r) return;
+  if (!r.ok) return toast(await r.text() || `Error ${r.status}`);
+  const cd = r.headers.get("Content-Disposition") || "";
+  const name = (cd.match(/filename="?([^";]+)"?/) || [])[1] || `Config_${topic}.dmp`;
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement("a"); a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  toast(`Saved ${name}`);
+}
+
+function pickRestore(topic) {
+  if (data.read_only) return readOnlyNotice();
+  const input = $("restoreFile");
+  input.value = "";
+  input.onchange = () => { if (input.files[0]) restoreDevice(topic, input.files[0]); };
+  input.click();
+}
+
+async function restoreDevice(topic, file) {
+  const d = byTopic(topic); if (!d) return;
+  const ok = await confirmDialog(`Restore ${d.name}?`,
+    `<p>Upload <b>${esc(file.name)}</b> (${Math.round(file.size / 1024)} KB) to ${esc(d.name)} (${esc(d.ip ?? "?")}).</p>
+     <p>The device restarts with that whole configuration: Wi-Fi, MQTT, topic, name, GPIOs, rules, SetOptions.</p>
+     <p class="warn-text">A file from another device copies its name, topic and network settings too: use one made from this device.</p>`,
+    "Restore and restart");
+  if (!ok) return;
+  const body = await file.arrayBuffer();
+  toast(`Restoring ${d.name}…`);
+  let r;
+  try {
+    r = await withPassword(d.name, pw => fetch(`/api/devices/${encodeURIComponent(topic)}/restore`,
+      { method: "POST", body, headers: Object.assign({ "Content-Type": "application/octet-stream" }, pw ? { "X-Web-Password": pw } : {}) }));
+  } catch (e) { return toast("Server not reachable"); }
+  if (!r) return;
+  toast(r.ok ? `${d.name}: configuration restored, the device restarts` : (await r.text() || `Error ${r.status}`));
+}
+
+function openWifi(topic) {
+  const d = byTopic(topic); if (!d) return;
+  $("wifiTitle").textContent = `${d.name} — Wi-Fi networks`;
+  let h = `<p class="hint">Only the network the device is not using can be changed: changing the one in use could leave it unable to reconnect. To change that one, switch the device to the other network first (Wifi view, AP).</p>`;
+  for (const slot of [1, 2]) {
+    const name = slot === 1 ? d.ssid1 : d.ssid2;
+    const inUse = d.ap === slot;
+    h += `<div class="wifi-slot"><b>SSId${slot}</b>: ${name ? esc(name) : "<i>not set</i>"} ${inUse ? `<span class="use">· in use</span>` : ""}`;
+    if (!inUse && d.ap != null) {
+      h += `<label>Network name<input id="wSsid${slot}" maxlength="32" value="${esc(name ?? "")}" autocomplete="off"></label>
+        <label>Password (8–63 characters)<input id="wPw${slot}" type="password" maxlength="63" autocomplete="new-password"></label>
+        <div class="dlg-buttons"><button class="btn primary" data-wifi-save="${slot}" ${d.online !== true ? "disabled" : ""}>Save and restart</button></div>`;
+    }
+    h += `</div>`;
+  }
+  if (d.ap == null) h += `<p class="warn-text">Which network the device is using is not known yet: press Refresh.</p>`;
+  $("wifiBody").innerHTML = h;
+  $("wifiBody").querySelectorAll("[data-wifi-save]").forEach(b => b.onclick = async () => {
+    const slot = +b.dataset.wifiSave;
+    const ssid = $("wSsid" + slot).value.trim(), password = $("wPw" + slot).value;
+    if (data.read_only) return readOnlyNotice();
+    if (!ssid || ssid.length > 32 || ssid.includes(";")) return toast("The network name must be 1 to 32 characters, without ';'.");
+    if (password.length < 8 || password.length > 63 || password.includes(";")) return toast("The password must be 8 to 63 characters, without ';'.");
+    const ok = await confirmDialog(`Set SSId${slot} on ${d.name}?`,
+      `<p>SSId${slot} becomes <b>${esc(ssid)}</b>, with the password you typed.</p>
+       <p>The device restarts and stays on the network it is using now (SSId${d.ap}); it moves to this one only if that one is lost, or when you switch it.</p>
+       <p class="hint">The password is sent to the device only, and neither stored nor shown by Tasmota Derust.</p>`,
+      "Save and restart");
+    if (!ok) return;
+    try {
+      const r = await fetch(`/api/devices/${encodeURIComponent(topic)}/wifi/${slot}`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ssid, password }) });
+      if (!r.ok) return toast(await r.text() || `Error ${r.status}`);
+      $("wifiDlg").close();
+      toast(`${d.name}: SSId${slot} set, the device restarts`);
+    } catch (e) { toast("Server not reachable"); }
+  });
+  $("wifiClose").onclick = () => $("wifiDlg").close();
+  $("wifiDlg").showModal();
+}
+$("optBackup").addEventListener("click", () => { if (opt.topic) backupDevice(opt.topic); });
 
 renderHeader();
 load();

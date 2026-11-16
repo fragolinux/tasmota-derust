@@ -72,6 +72,9 @@ fun DeviceSheet(
     onCt: (Long) -> Unit,
     onWhite: (Long) -> Unit,
     onOptions: () -> Unit,
+    onWifi: () -> Unit,
+    onBackup: () -> Unit,
+    onRestore: () -> Unit,
     /** Read-only mode (app-wide). Commands stay tappable and explain why nothing happens. */
     readOnly: Boolean,
     onReadOnly: () -> Unit,
@@ -126,6 +129,11 @@ fun DeviceSheet(
                 }
                 if (d.hasOptions) {
                     OutlinedButton(onClick = onOptions) { Text("SetOptions") }
+                }
+                if (!d.isOffline) {
+                    OutlinedButton(onClick = onWifi) { Text("Wi-Fi networks") }
+                    OutlinedButton(onClick = onBackup) { Text("Back up") }
+                    OutlinedButton(onClick = onRestore) { Text("Restore") }
                 }
                 val plan = d.upgradePlan
                 if (!d.upgradeBusy && d.canSwitchChannel) {

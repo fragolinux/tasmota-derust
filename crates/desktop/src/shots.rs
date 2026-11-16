@@ -17,6 +17,9 @@ const STEPS: &[&str] = &[
     "settings",
     "light",
     "options",
+    "tools",
+    "wifi-networks",
+    "backup",
     "upgrade",
     "changelog",
 ];
@@ -60,6 +63,9 @@ impl DerustApp {
             self.log_open = false;
             self.light_open = None;
             self.options_open = None;
+            self.tools_open = None;
+            self.wifi_open = None;
+            self.backup_open = None;
             self.changelog = None;
             if s.step == STEPS.len() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -100,6 +106,24 @@ impl DerustApp {
                         if let Some(d) = self.store.devices.values().find(|d| d.light.is_some()) {
                             self.handle_actions(vec![UiAction::OpenOptions(d.topic.clone())]);
                         }
+                    }
+                }
+                "tools" => {
+                    self.cfg.view = View::Home;
+                    if self.tools_open.is_none() {
+                        self.tools_open = Some(("cucina".into(), egui::pos2(60.0, 120.0), false));
+                    }
+                }
+                "wifi-networks" => {
+                    self.cfg.view = View::Wifi;
+                    if self.wifi_open.is_none() {
+                        self.handle_actions(vec![UiAction::OpenWifi("cucina".into())]);
+                    }
+                }
+                "backup" => {
+                    self.cfg.view = View::Home;
+                    if self.backup_open.is_none() {
+                        self.handle_actions(vec![UiAction::OpenBackup("cucina".into())]);
                     }
                 }
                 "upgrade" => {

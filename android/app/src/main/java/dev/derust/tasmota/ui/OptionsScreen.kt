@@ -82,6 +82,7 @@ fun OptionsScreen(
     onClose: () -> Unit,
     onSet: (Int, Long) -> Unit,
     onReadOnly: () -> Unit,
+    onBackup: () -> Unit,
 ) {
     var search by rememberSaveable { mutableStateOf("") }
     var onlyChanged by rememberSaveable { mutableStateOf(false) }
@@ -105,6 +106,7 @@ fun OptionsScreen(
                 TopAppBar(
                     title = { Text("$name — SetOptions", maxLines = 1) },
                     navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.Back, "Back") } },
+                    actions = { TextButton(onClick = onBackup) { Text("Back up first") } },
                 )
             },
         ) { pad ->

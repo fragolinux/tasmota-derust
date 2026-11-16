@@ -194,6 +194,12 @@ cargo run -p tasmota-derust-core --example simulator -- 127.0.0.1:1884
 Then point the app at `127.0.0.1`, port `1884`. From the Android emulator the computer is
 `10.0.2.2`; from a phone on USB, `adb reverse tcp:1884 tcp:1884` and use `127.0.0.1`.
 
+## Ideas for later (TODO)
+
+- Backups: a local database of every device's configuration dumps, versioned (keep the
+  history, compare two versions) and taken on a schedule; for now backup and restore are
+  per device and on request (`crates/core/src/backup.rs`).
+
 ## Other tools
 
 - README screenshots: `cargo run --release -p tasmota-derust --features screenshots` with

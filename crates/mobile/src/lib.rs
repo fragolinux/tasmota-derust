@@ -35,6 +35,7 @@ pub enum CommandError {
     NotALight,
     OptionBlocked,
     BadOption,
+    Wifi(tasmota_derust_core::wifi::WifiError),
 }
 
 impl CommandError {
@@ -53,6 +54,7 @@ impl CommandError {
             CommandError::NotALight => E::NotALight,
             CommandError::OptionBlocked => E::OptionBlocked,
             CommandError::BadOption => E::BadOption,
+            CommandError::Wifi(w) => E::Wifi(*w),
         }
     }
 }
@@ -81,6 +83,7 @@ impl From<session::CommandError> for CommandError {
             E::NotALight => CommandError::NotALight,
             E::OptionBlocked => CommandError::OptionBlocked,
             E::BadOption => CommandError::BadOption,
+            E::Wifi(w) => CommandError::Wifi(w),
         }
     }
 }
@@ -146,6 +149,9 @@ pub struct Device {
     pub can_switch_channel: bool,
     /// The device reported its SetOptions.
     pub has_options: bool,
+    /// This device's own SSId1 / SSId2.
+    pub ssid1: Option<String>,
+    pub ssid2: Option<String>,
     pub light: Option<Light>,
 }
 
@@ -260,6 +266,8 @@ impl From<session::DeviceInfo> for Device {
             }),
             can_switch_channel: d.can_switch_channel,
             has_options: d.has_options,
+            ssid1: d.ssid1,
+            ssid2: d.ssid2,
             up_to_date: d.up_to_date,
             upgrade_plan: UpgradePlan {
                 kind: d.upgrade_plan.kind.to_string(),
@@ -401,9 +409,89 @@ impl Session {
         })
     }
 
+    /// Sets the Wi-Fi network the device is NOT using (`slot` 1 or 2): one restart. The
+    /// password is sent to the device only.
+    pub fn set_wifi(
+        &self,
+        topic: String,
+        slot: u8,
+        ssid: String,
+        password: String,
+    ) -> Result<(), CommandError> {
+        Ok(self.inner.set_wifi(&topic, slot, &ssid, &password)?)
+    }
+
+    /// The device's whole configuration (Tasmota's .dmp), from its web server. Blocking:
+    /// call it off the main thread. Allowed in read-only mode (it changes nothing).
+    pub fn backup(
+        &self,
+        topic: String,
+        password: Option<String>,
+    ) -> Result<BackupFile, BackupError> {
+        let b = self.inner.backup(&topic, password.as_deref())?;
+        Ok(BackupFile {
+            name: b.name,
+            data: b.data,
+        })
+    }
+
+    /// Uploads a configuration file; the device restarts with it. Blocking.
+    pub fn restore(
+        &self,
+        topic: String,
+        password: Option<String>,
+        data: Vec<u8>,
+    ) -> Result<(), BackupError> {
+        Ok(self.inner.restore(&topic, password.as_deref(), &data)?)
+    }
+
     /// `SetOption<n> <value>`, then the options are read back. MQTT or Wi-Fi off is refused.
     pub fn set_option(&self, topic: String, n: u16, value: u32) -> Result<(), CommandError> {
         Ok(self.inner.set_option(&topic, n, value)?)
+    }
+}
+
+/// A configuration dump: Tasmota's file name and its bytes.
+#[derive(uniffi::Record)]
+pub struct BackupFile {
+    pub name: String,
+    pub data: Vec<u8>,
+}
+
+/// Why a backup or restore did not work.
+#[derive(Debug, uniffi::Error)]
+pub enum BackupError {
+    /// The device's web interface has a password: ask for it and try again.
+    NeedsPassword,
+    WrongPassword,
+    NoAddress,
+    Failed {
+        reason: String,
+    },
+}
+
+impl std::fmt::Display for BackupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BackupError::NeedsPassword => f.write_str("The device's web interface has a password."),
+            BackupError::WrongPassword => f.write_str("Wrong web password."),
+            BackupError::NoAddress => f.write_str("The device's IP address is not known yet."),
+            BackupError::Failed { reason } => f.write_str(reason),
+        }
+    }
+}
+
+impl std::error::Error for BackupError {}
+
+impl From<tasmota_derust_core::backup::BackupError> for BackupError {
+    fn from(e: tasmota_derust_core::backup::BackupError) -> Self {
+        use tasmota_derust_core::backup::BackupError as E;
+        match e {
+            E::NeedsPassword => BackupError::NeedsPassword,
+            E::WrongPassword => BackupError::WrongPassword,
+            E::NoAddress => BackupError::NoAddress,
+            E::Failed(reason) => BackupError::Failed { reason },
+        }
     }
 }
 
@@ -450,6 +538,9 @@ pub struct Changelog {
     pub version: String,
     pub url: String,
     pub sections: Vec<ChangelogSection>,
+    /// The APK of that release, when it has one.
+    pub apk_url: Option<String>,
+    pub apk_name: Option<String>,
     /// Why they could not be loaded.
     pub error: Option<String>,
 }
@@ -464,6 +555,8 @@ pub struct ChangelogSection {
 pub fn changelog(version: String) -> Changelog {
     match tasmota_derust_core::github::changelog(&version) {
         Ok(c) => Changelog {
+            apk_url: c.download_for("android").map(|d| d.url.clone()),
+            apk_name: c.download_for("android").map(|d| d.name.clone()),
             version: c.version,
             url: c.url,
             sections: c
@@ -480,6 +573,8 @@ pub fn changelog(version: String) -> Changelog {
             version,
             url: "https://github.com/fragolinux/tasmota-derust/releases".into(),
             sections: Vec::new(),
+            apk_url: None,
+            apk_name: None,
             error: Some(e),
         },
     }

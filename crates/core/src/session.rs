@@ -51,6 +51,7 @@ pub enum CommandError {
     /// SetOption value refused: it would cut the device off from this app.
     OptionBlocked,
     BadOption,
+    Wifi(crate::wifi::WifiError),
 }
 
 impl CommandError {
@@ -74,6 +75,7 @@ impl CommandError {
                 "This value would cut the device off from this app: change it from the device's web UI or console."
             }
             CommandError::BadOption => "No such SetOption, or value out of range.",
+            CommandError::Wifi(e) => e.message(),
         }
     }
 }
@@ -392,6 +394,67 @@ impl Session {
         Ok(())
     }
 
+    /// Sets the Wi-Fi network the device is NOT using (`slot` 1 or 2): name and password in one
+    /// Backlog, one restart. The network in use can't be changed from here (see `wifi`).
+    pub fn set_wifi(
+        &self,
+        topic: &str,
+        slot: u8,
+        ssid: &str,
+        password: &str,
+    ) -> Result<(), CommandError> {
+        let action = {
+            let s = self.shared.lock().unwrap();
+            self.guard(&s, topic)?;
+            let d = s
+                .store
+                .devices
+                .get(topic)
+                .ok_or(CommandError::UnknownDevice)?;
+            let payload =
+                crate::wifi::command(slot, d.ap, ssid, password).map_err(CommandError::Wifi)?;
+            s.store.command(topic, "BACKLOG", &payload)
+        };
+        run_actions(&self.mqtt, action.into_iter().collect());
+        Ok(())
+    }
+
+    fn device_ip(&self, topic: &str) -> Result<(String, String), crate::backup::BackupError> {
+        let s = self.shared.lock().unwrap();
+        let d = s.store.devices.get(topic).ok_or_else(|| {
+            crate::backup::BackupError::Failed(CommandError::UnknownDevice.message().into())
+        })?;
+        let ip = d.ip.clone().ok_or(crate::backup::BackupError::NoAddress)?;
+        Ok((ip, crate::backup::default_name(topic, d.version.as_deref())))
+    }
+
+    /// Downloads the device's whole configuration (Tasmota's `.dmp`) from its web server.
+    /// Blocking. Changes nothing, so it is allowed in read-only mode.
+    pub fn backup(
+        &self,
+        topic: &str,
+        password: Option<&str>,
+    ) -> Result<crate::backup::Backup, crate::backup::BackupError> {
+        let (ip, name) = self.device_ip(topic)?;
+        crate::backup::download(&ip, password, &name)
+    }
+
+    /// Uploads a configuration dump to the device, which restarts with it. Blocking.
+    pub fn restore(
+        &self,
+        topic: &str,
+        password: Option<&str>,
+        data: &[u8],
+    ) -> Result<(), crate::backup::BackupError> {
+        {
+            let s = self.shared.lock().unwrap();
+            self.guard(&s, topic)
+                .map_err(|e| crate::backup::BackupError::Failed(e.message().into()))?;
+        }
+        let (ip, _) = self.device_ip(topic)?;
+        crate::backup::restore(&ip, password, data)
+    }
+
     fn targets(&self) -> crate::ota::Targets {
         let get = |l: &Mutex<Latest>| match &*l.lock().unwrap() {
             Latest::Ok(v) => Some(v.clone()),
@@ -482,6 +545,9 @@ pub struct DeviceInfo {
     pub can_switch_channel: bool,
     /// The device reported its SetOptions (see `Session::options`).
     pub has_options: bool,
+    /// This device's own SSId1 / SSId2.
+    pub ssid1: Option<String>,
+    pub ssid2: Option<String>,
 }
 
 /// A light, as the front ends draw it.
@@ -609,6 +675,8 @@ impl DeviceInfo {
             up_to_date,
             upgrade_plan,
             has_options: !d.set_options.is_empty(),
+            ssid1: d.ssids[0].clone(),
+            ssid2: d.ssids[1].clone(),
             upgrade: d.upgrade.as_ref().map(|u| {
                 let (state, text) = match &u.phase {
                     UpgradePhase::Sent => ("sent", "Command sent…".to_string()),

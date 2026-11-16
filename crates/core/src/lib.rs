@@ -1,6 +1,7 @@
 //! Shared core of Tasmota Derust: device model, MQTT connection, settings.
 //! Used by the desktop app, the web server and the Android library.
 
+pub mod backup;
 pub mod columns;
 pub mod config;
 pub mod device;
@@ -10,6 +11,7 @@ pub mod mqtt;
 pub mod ota;
 pub mod session;
 pub mod setoption;
+pub mod wifi;
 
 use std::sync::Arc;
 

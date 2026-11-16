@@ -59,6 +59,8 @@ struct Fake {
     deaf_until: Option<Instant>,
     /// `StatusLOG.SetOption` registers.
     set_options: Vec<String>,
+    /// SSId1 / SSId2 ("" = not set).
+    ssids: [String; 2],
 }
 
 const FLASH_KB: i64 = 1000;
@@ -359,6 +361,12 @@ fn devices() -> Vec<Fake> {
                     ct: 300,
                     white: 0,
                     deaf_until: None,
+                    // One device with a single Wi-Fi network, to add the second one.
+                    ssids: if topic == "cucina" {
+                        [SSIDS[0].to_string(), String::new()]
+                    } else {
+                        [SSIDS[0].to_string(), SSIDS[1].to_string()]
+                    },
                     // 6.7.1 reports four registers, current firmware six.
                     set_options: if topic == "vecchio_interruttore" {
                         [
@@ -412,7 +420,7 @@ impl Fake {
 
     fn wifi(&self) -> Value {
         json!({
-            "AP": self.ap, "SSId": SSIDS[(self.ap - 1) as usize], "BSSId": "11:22:33:44:55:66",
+            "AP": self.ap, "SSId": self.ssids[(self.ap - 1) as usize], "BSSId": "11:22:33:44:55:66",
             "Channel": if self.ap == 1 { 6 } else { 11 }, "RSSI": self.rssi, "LinkCount": 1, "Downtime": "0T00:00:04"
         })
     }
@@ -499,7 +507,7 @@ impl Fake {
 
     fn status_log(&self) -> Value {
         json!({ "SerialLog": 2, "WebLog": 2, "MqttLog": 0, "SysLog": 0, "LogHost": "", "LogPort": 514,
-                "SSId": [SSIDS[0], SSIDS[1]], "TelePeriod": 15, "Resolution": "558180C0",
+                "SSId": self.ssids, "TelePeriod": 15, "Resolution": "558180C0",
                 "SetOption": self.set_options })
     }
 
@@ -623,7 +631,11 @@ fn main() {
                 }
                 let (topic, cmd) = (parts[1], parts[2].to_ascii_uppercase());
                 let payload = String::from_utf8_lossy(&p.payload).trim().to_string();
-                println!("<- {} {}", p.topic, payload);
+                println!(
+                    "<- {} {}",
+                    p.topic,
+                    tasmota_derust_core::wifi::mask_passwords(&payload)
+                );
                 handle(&client, &fakes, topic, &cmd, &payload);
             }
             Ok(_) => {}
@@ -690,10 +702,10 @@ fn handle(client: &Client, fakes: &Arc<Mutex<Vec<Fake>>>, topic: &str, cmd: &str
             json!({ "Module": { "1": f.module } }).to_string(),
         ),
         "SSID1" if payload.is_empty() => {
-            send(stat("RESULT"), json!({ "SSId1": SSIDS[0] }).to_string())
+            send(stat("RESULT"), json!({ "SSId1": f.ssids[0] }).to_string())
         }
         "SSID2" if payload.is_empty() => {
-            send(stat("RESULT"), json!({ "SSId2": SSIDS[1] }).to_string())
+            send(stat("RESULT"), json!({ "SSId2": f.ssids[1] }).to_string())
         }
         c if c.starts_with("POWER") => {
             let n = c[5..].parse::<usize>().unwrap_or(1);
@@ -758,6 +770,28 @@ fn handle(client: &Client, fakes: &Arc<Mutex<Vec<Fake>>>, topic: &str, cmd: &str
         "AP" if payload == "1" || payload == "2" => {
             f.ap = payload.parse().unwrap();
             restart(client.clone(), fakes.clone(), topic.to_string(), None);
+        }
+        // Only what the app sends: "SSId<n> <name>; Password<n> <pw>" (one restart).
+        "BACKLOG" => {
+            let mut changed = false;
+            for part in payload.split(';') {
+                let (cmd, val) = part.trim().split_once(' ').unwrap_or((part.trim(), ""));
+                let cmd = cmd.to_ascii_uppercase();
+                if let Some(n) = cmd
+                    .strip_prefix("SSID")
+                    .and_then(|n| n.parse::<usize>().ok())
+                {
+                    if (1..=2).contains(&n) && !val.is_empty() {
+                        f.ssids[n - 1] = val.trim().to_string();
+                        changed = true;
+                    }
+                } else if cmd.starts_with("PASSWORD") {
+                    changed = true; // never stored, never printed
+                }
+            }
+            if changed {
+                restart(client.clone(), fakes.clone(), topic.to_string(), None);
+            }
         }
         "OTAURL" if !payload.is_empty() => {
             f.ota_url = payload.to_string();

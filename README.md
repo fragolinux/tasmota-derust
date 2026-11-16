@@ -68,7 +68,7 @@ connects to the MQTT broker you configure (and to your devices' own web pages wh
 them), asks GitHub for the version numbers of the latest Tasmota release and development
 build (to mark outdated firmware) and of the latest Tasmota Derust release (to say when a
 newer one is out) and its release notes when you open them, asks ota.tasmota.com for the size of a firmware image before an
-upgrade step, and downloads the SetOption descriptions from the Tasmota documentation on
+upgrade step, talks to a device's own web server when you back it up or restore it, and downloads the SetOption descriptions from the Tasmota documentation on
 GitHub the first time you open a SetOptions window. Nothing about you or your devices is sent anywhere.
 
 ## Features
@@ -112,11 +112,22 @@ GitHub the first time you open a SetOptions window. Nothing about you or your de
   and cached; without internet the options are shown by number. The defaults are those of a
   freshly flashed current Tasmota (the documentation's, corrected from the firmware source
   where it is wrong): a device upgraded from old versions can keep older values.
+- **Wi-Fi networks**: shows each device's SSId1 and SSId2 and which one is in use, and sets
+  the one it is NOT using (name + password, one restart): add a second network to a device
+  that has only one, or change the spare one. The network in use can't be changed from here,
+  since a mistake would cut the device off: switch it to the other network first. Passwords go
+  to the device only, never stored or logged.
+- **Backup / restore** of a device's whole configuration (Wi-Fi, MQTT, topic, GPIOs, rules,
+  SetOptions), through its own web server: the same `.dmp` file as Tasmota's Configuration >
+  Backup / Restore pages. "Back up first" sits in the SetOptions window too. The device's web
+  password is asked only when it has one, and never stored.
 - Message log panel for troubleshooting.
-- The version at the bottom right opens the list of changes of that release (and of a newer
-  one, when it is out).
+- The version (bottom right on the desktop, next to the title on Android) opens the list of
+  changes of that release, and of a newer one when it is out, with the download for the
+  system in use next to the link to the release page.
 - **Read-only mode**, on at every start: only read queries (`Status 0`, `Module`, `SSId1/2`)
-  are sent, and relays, Wi-Fi switching, SetOptions and upgrades are refused. Trying one says that
+  are sent, and relays, Wi-Fi switching and settings, SetOptions, restores and upgrades are
+  refused (a backup is allowed: it changes nothing). Trying one says that
   read-only is on and where to turn it off.
 
 ## Screenshots

@@ -132,9 +132,9 @@ fun SettingsScreen(
     }
 }
 
-/** Release notes of a Tasmota Derust version, loaded from GitHub. */
+/** Release notes of a Tasmota Derust version, loaded from GitHub, with its APK to download. */
 @Composable
-private fun ChangelogDialog(version: String, onClose: () -> Unit) {
+fun ChangelogDialog(version: String, onClose: () -> Unit) {
     var notes by remember(version) { mutableStateOf<Changelog?>(null) }
     LaunchedEffect(version) { notes = withContext(Dispatchers.IO) { changelog(version) } }
     val uri = LocalUriHandler.current
@@ -153,6 +153,14 @@ private fun ChangelogDialog(version: String, onClose: () -> Unit) {
                         sec.items.forEach { Text("• $it") }
                         Spacer(Modifier.padding(top = 6.dp))
                     }
+                }
+                val apk = n?.apkUrl
+                if (apk != null) {
+                    Button(onClick = { uri.openUri(apk) }, modifier = Modifier.padding(top = 8.dp)) {
+                        Text("Download ${n.apkName ?: "the APK"}")
+                    }
+                } else if (n != null && n.error == null) {
+                    Text("No APK in this release.", style = MaterialTheme.typography.bodySmall)
                 }
             }
         },

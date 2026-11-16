@@ -9,12 +9,13 @@ use std::net::{IpAddr, SocketAddr, TcpListener, UdpSocket};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
+use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 use tasmota_derust_core::config::BrokerConfig;
@@ -57,6 +58,9 @@ pub fn router(session: Arc<Session>, read_only_hint: &str) -> Router {
         .route("/api/devices/{topic}/ct/{n}", post(api_ct))
         .route("/api/devices/{topic}/white/{n}", post(api_white))
         .route("/api/devices/{topic}/options", get(api_options))
+        .route("/api/devices/{topic}/wifi/{slot}", post(api_wifi))
+        .route("/api/devices/{topic}/backup", post(api_backup))
+        .route("/api/devices/{topic}/restore", post(api_restore))
         .route(
             "/api/devices/{topic}/option/{n}/{value}",
             post(api_set_option),
@@ -219,7 +223,8 @@ fn reply(st: &AppState, r: Result<(), CommandError>) -> Response {
             CommandError::NoSuchRelay
             | CommandError::BadAp
             | CommandError::OptionBlocked
-            | CommandError::BadOption,
+            | CommandError::BadOption
+            | CommandError::Wifi(_),
         ) => StatusCode::BAD_REQUEST,
     };
     (code, r.unwrap_err().message()).into_response()
@@ -284,6 +289,91 @@ async fn api_set_option(
     Path((topic, n, value)): Path<(String, u16, u32)>,
 ) -> Response {
     reply(&st, st.session.set_option(&topic, n, value))
+}
+
+#[derive(Deserialize)]
+struct WifiBody {
+    ssid: String,
+    password: String,
+}
+
+/// Sets the Wi-Fi network the device is not using (name + password, one restart).
+async fn api_wifi(
+    State(st): State<AppState>,
+    Path((topic, slot)): Path<(String, u8)>,
+    Json(body): Json<WifiBody>,
+) -> Response {
+    reply(
+        &st,
+        st.session
+            .set_wifi(&topic, slot, &body.ssid, &body.password),
+    )
+}
+
+/// The device's web password, when the user gave one (header, never in the URL).
+fn web_password(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-web-password")
+        .and_then(|v| v.to_str().ok())
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+}
+
+fn backup_error(e: tasmota_derust_core::backup::BackupError) -> Response {
+    use tasmota_derust_core::backup::BackupError as E;
+    let code = match e {
+        // 401 from the device: the page asks for its web password.
+        E::NeedsPassword | E::WrongPassword => StatusCode::UNAUTHORIZED,
+        E::NoAddress => StatusCode::CONFLICT,
+        E::Failed(_) => StatusCode::BAD_GATEWAY,
+    };
+    (code, e.to_string()).into_response()
+}
+
+/// The device's whole configuration (Tasmota's .dmp), downloaded from its web server.
+async fn api_backup(
+    State(st): State<AppState>,
+    Path(topic): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let pw = web_password(&headers);
+    let r = tokio::task::spawn_blocking(move || st.session.backup(&topic, pw.as_deref())).await;
+    match r {
+        Ok(Ok(b)) => (
+            [
+                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                (
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}\"", b.name),
+                ),
+            ],
+            b.data,
+        )
+            .into_response(),
+        Ok(Err(e)) => backup_error(e),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Uploads a configuration file (request body) to the device, which restarts with it.
+async fn api_restore(
+    State(st): State<AppState>,
+    Path(topic): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if st.session.read_only() {
+        let msg = format!("{} {}", CommandError::ReadOnly.message(), st.read_only_hint);
+        return (StatusCode::FORBIDDEN, msg).into_response();
+    }
+    let pw = web_password(&headers);
+    let r =
+        tokio::task::spawn_blocking(move || st.session.restore(&topic, pw.as_deref(), &body)).await;
+    match r {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Err(e)) => backup_error(e),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 async fn api_upgrade(State(st): State<AppState>, Path(topic): Path<String>) -> Response {

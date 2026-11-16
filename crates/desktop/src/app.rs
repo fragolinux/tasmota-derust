@@ -17,6 +17,7 @@ use tasmota_derust_core::light;
 use tasmota_derust_core::mqtt::{Mqtt, MqttEvent};
 use tasmota_derust_core::ota;
 use tasmota_derust_core::setoption::{self, OptionInfo, Risk};
+use tasmota_derust_core::{backup, wifi};
 use tasmota_derust_web::WebServer;
 
 #[cfg(feature = "screenshots")]
@@ -48,6 +49,32 @@ enum Confirm {
     SetOption(String, u16, u32),
 }
 
+/// Wi-Fi networks window of one device: the slot being edited and what was typed.
+struct WifiWindow {
+    key: String,
+    ssid: String,
+    password: String,
+    /// The confirmation is open.
+    confirm: bool,
+}
+
+type BackupSlot = Arc<Mutex<Option<Result<String, backup::BackupError>>>>;
+
+/// Backup / restore window of one device.
+struct BackupWindow {
+    key: String,
+    /// The device's web password, only when it has one (kept while the window is open).
+    password: String,
+    /// The .dmp file chosen for a restore (Downloads list or dropped on the window).
+    chosen: Option<std::path::PathBuf>,
+    confirm: bool,
+    /// The running job and what it reports (Ok: a sentence for the user).
+    job: Option<(&'static str, BackupSlot)>,
+    result: Option<Result<String, backup::BackupError>>,
+    /// Last backup saved, for "Show in folder".
+    saved: Option<std::path::PathBuf>,
+}
+
 /// SetOption window of one device.
 struct OptionsWindow {
     key: String,
@@ -66,6 +93,10 @@ enum UiAction {
     SetChannel(String, bool),
     OpenLight(String),
     OpenOptions(String),
+    OpenWifi(String),
+    OpenBackup(String),
+    /// The gear's menu, at that screen position.
+    OpenTools(String, egui::Pos2),
     Sort(Option<Col>),
 }
 
@@ -116,6 +147,11 @@ pub struct DerustApp {
     /// Changelog popup: version and its notes (None while loading).
     changelog: Option<(String, ChangelogSlot)>,
     options_open: Option<OptionsWindow>,
+    wifi_open: Option<WifiWindow>,
+    backup_open: Option<BackupWindow>,
+    /// The gear's menu: device, where it opens, and "opened this frame" (that click is not
+    /// a click outside it).
+    tools_open: Option<(String, egui::Pos2, bool)>,
     #[cfg(feature = "screenshots")]
     shots: Option<shots::Shots>,
 }
@@ -149,6 +185,9 @@ impl DerustApp {
             changelog: None,
             light_open: None,
             options_open: None,
+            wifi_open: None,
+            backup_open: None,
+            tools_open: None,
             #[cfg(feature = "screenshots")]
             shots: shots::Shots::from_env(),
         };
@@ -183,7 +222,8 @@ impl DerustApp {
     }
 
     fn push_log(&mut self, dir: char, topic: &str, payload: &str) {
-        let mut payload = payload.to_string();
+        // Wi-Fi passwords never reach the log.
+        let mut payload = wifi::mask_passwords(payload);
         if payload.len() > 400 {
             let mut cut = 400;
             while !payload.is_char_boundary(cut) {
@@ -479,6 +519,7 @@ impl DerustApp {
         let mut open = true;
         let mut change: Option<(OptionInfo, u32)> = None;
         let mut refresh = false;
+        let mut open_backup = false;
         egui::Window::new(format!("{name} — SetOptions"))
             .id(egui::Id::unique("options-window"))
             .open(&mut open)
@@ -495,6 +536,13 @@ impl DerustApp {
                     ui.checkbox(&mut w.only_changed, "Only changed from default");
                     if ui.button("Reload").on_hover_text("Ask the device for its options again").clicked() {
                         refresh = true;
+                    }
+                    if ui
+                        .button("Back up first")
+                        .on_hover_text("Save the device's whole configuration before changing risky options")
+                        .clicked()
+                    {
+                        open_backup = true;
                     }
                 });
                 match view.texts {
@@ -556,11 +604,398 @@ impl DerustApp {
         if let Some((o, v)) = change {
             self.request_option(&key, &o, v);
         }
+        if open_backup {
+            self.handle_actions(vec![UiAction::OpenBackup(key.clone())]);
+        }
         if refresh {
             // Status 0 holds the options too, and it is a read query (allowed in read-only).
             if let Some(a) = self.store.command(&key, "STATUS", "0") {
                 self.apply(vec![a]);
             }
+        }
+    }
+
+    /// The gear's menu: SetOptions, Wi-Fi networks, backup / restore.
+    fn tools_menu(&mut self, ctx: &egui::Context) {
+        let Some((key, pos, fresh)) = self.tools_open.clone() else {
+            return;
+        };
+        let has_options = self
+            .store
+            .devices
+            .get(&key)
+            .is_some_and(|d| !d.set_options.is_empty());
+        let mut picked = None;
+        let area = egui::Area::new(egui::Id::unique("tools-menu").with(&key))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(200.0);
+                    if ui
+                        .add_enabled(has_options, egui::Button::new("SetOptions…").frame(false))
+                        .clicked()
+                    {
+                        picked = Some(UiAction::OpenOptions(key.clone()));
+                    }
+                    if ui
+                        .add(egui::Button::new("Wi-Fi networks…").frame(false))
+                        .clicked()
+                    {
+                        picked = Some(UiAction::OpenWifi(key.clone()));
+                    }
+                    if ui
+                        .add(egui::Button::new("Backup / restore…").frame(false))
+                        .clicked()
+                    {
+                        picked = Some(UiAction::OpenBackup(key.clone()));
+                    }
+                });
+            });
+        let clicked_outside = !fresh
+            && ctx.input(|i| i.pointer.any_click())
+            && !area
+                .response
+                .rect
+                .contains(ctx.input(|i| i.pointer.interact_pos()).unwrap_or_default());
+        if picked.is_some() || clicked_outside || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.tools_open = None;
+        } else if fresh {
+            self.tools_open = Some((key.clone(), pos, false));
+        }
+        if let Some(a) = picked {
+            self.handle_actions(vec![a]);
+        }
+    }
+
+    /// Wi-Fi networks of one device; only the one it is not using can be changed.
+    fn wifi_window(&mut self, ctx: &egui::Context) {
+        let Some(mut w) = self.wifi_open.take() else {
+            return;
+        };
+        let Some(d) = self.store.devices.get(&w.key) else {
+            return;
+        };
+        let name = d.display_name().to_string();
+        let ssids = d.ssids.clone();
+        let active = d.ap;
+        let online = d.is_online();
+        let mut open = true;
+        let mut send = false;
+        let slot = match active {
+            Some(1) => Some(2u8),
+            Some(2) => Some(1u8),
+            _ => None,
+        };
+        if w.ssid.is_empty() && !w.confirm {
+            if let Some(s) = slot.and_then(|s| ssids[s as usize - 1].clone()) {
+                w.ssid = s;
+            }
+        }
+        egui::Window::new(format!("{name} — Wi-Fi networks"))
+            .id(egui::Id::unique("wifi-window").with(&w.key))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(
+                        "Only the network the device is not using can be changed: changing the one \
+                         in use could leave it unable to reconnect. To change that one, switch the \
+                         device to the other network first (Wifi view, AP column).",
+                    )
+                    .weak(),
+                );
+                ui.add_space(6.0);
+                egui::Grid::new("wifi-grid").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                    for i in 0..2 {
+                        ui.label(format!("SSId{}", i + 1));
+                        let text = ssids[i].clone().unwrap_or_else(|| "not set".into());
+                        let in_use = active == Some(i as i64 + 1);
+                        ui.label(if in_use {
+                            RichText::new(format!("{text}  · in use")).color(GREEN)
+                        } else {
+                            RichText::new(text)
+                        });
+                        ui.end_row();
+                    }
+                });
+                ui.separator();
+                let Some(slot) = slot else {
+                    ui.colored_label(ORANGE, "Which network the device is using is not known yet: press Refresh.");
+                    return;
+                };
+                ui.label(RichText::new(format!("Set SSId{slot}")).strong());
+                ui.add_enabled_ui(online && !w.confirm, |ui| {
+                    egui::Grid::new("wifi-form").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                        ui.label("Network name");
+                        ui.add(egui::TextEdit::singleline(&mut w.ssid).char_limit(32).desired_width(240.0));
+                        ui.end_row();
+                        ui.label("Password");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut w.password)
+                                .password(true)
+                                .char_limit(63)
+                                .desired_width(240.0)
+                                .hint_text("8 to 63 characters"),
+                        );
+                        ui.end_row();
+                    });
+                });
+                let check = wifi::command(slot, active, &w.ssid, &w.password);
+                if let Err(e) = &check {
+                    // Only once something was typed (the name is prefilled).
+                    if !w.password.is_empty() {
+                        ui.colored_label(ORANGE, e.message());
+                    }
+                }
+                if !online {
+                    ui.colored_label(RED, "The device is not online.");
+                }
+                ui.add_space(6.0);
+                if !w.confirm {
+                    if ui
+                        .add_enabled(check.is_ok() && online, egui::Button::new("Save and restart…"))
+                        .clicked()
+                    {
+                        w.confirm = true;
+                    }
+                } else {
+                    ui.label(format!(
+                        "SSId{slot} becomes \"{}\". The device restarts and stays on SSId{} (the \
+                         network it uses now); it moves to the new one only if that one is lost, or \
+                         when you switch it.",
+                        w.ssid.trim(),
+                        active.unwrap_or(0)
+                    ));
+                    ui.label(
+                        RichText::new("The password goes to the device only: it is neither stored nor shown here.")
+                            .weak(),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button(RichText::new("Save and restart").strong()).clicked() {
+                            send = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            w.confirm = false;
+                        }
+                    });
+                }
+            });
+        if send {
+            if self.read_only {
+                self.show_notice(READ_ONLY_NOTICE);
+                w.confirm = false;
+            } else if let (Some(slot), Ok(payload)) = (
+                slot,
+                wifi::command(slot.unwrap_or(0), active, &w.ssid, &w.password),
+            ) {
+                if let Some(a) = self.store.command(&w.key, "BACKLOG", &payload) {
+                    self.apply(vec![a]);
+                    self.show_notice(&format!("{name}: SSId{slot} set, the device restarts."));
+                    return;
+                }
+            }
+        }
+        if open {
+            self.wifi_open = Some(w);
+        }
+    }
+
+    /// Whole-configuration backup (saved in Downloads) and restore of one device.
+    fn backup_window(&mut self, ctx: &egui::Context) {
+        let Some(mut w) = self.backup_open.take() else {
+            return;
+        };
+        let Some(d) = self.store.devices.get(&w.key) else {
+            return;
+        };
+        let name = d.display_name().to_string();
+        let ip = d.ip.clone();
+        let online = d.is_online();
+        let fallback = backup::default_name(&w.key, d.version.as_deref());
+        // Finished job?
+        let finished = w
+            .job
+            .as_ref()
+            .and_then(|(what, slot)| slot.lock().unwrap().take().map(|r| (*what, r)));
+        if let Some((what, r)) = finished {
+            // A backup reports the path of the file it saved.
+            let r = match r {
+                Ok(path) if what == "backup" => {
+                    w.saved = Some(std::path::PathBuf::from(&path));
+                    Ok(format!("Saved {path}"))
+                }
+                r => r,
+            };
+            w.result = Some(r);
+            w.job = None;
+            w.confirm = false;
+        }
+        // A .dmp dropped on the window.
+        if let Some(p) = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .find_map(|f| Some(f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()))
+        }) {
+            w.chosen = Some(p);
+            w.confirm = false;
+        }
+        let dir = backup::downloads_dir();
+        let mut open = true;
+        let mut start: Option<&'static str> = None;
+        egui::Window::new(format!("{name} — Backup / restore"))
+            .id(egui::Id::unique("backup-window").with(&w.key))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(460.0)
+            .max_width(560.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(
+                        "The whole device configuration (Wi-Fi, MQTT, topic, GPIOs, rules, SetOptions), \
+                         through the device's own web server: the same .dmp file as its \
+                         Configuration > Backup / Restore pages.",
+                    )
+                    .weak(),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Web password");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut w.password)
+                            .password(true)
+                            .desired_width(180.0)
+                            .hint_text("only if the device has one"),
+                    );
+                });
+                if ip.is_none() {
+                    ui.colored_label(ORANGE, "The device's IP address is not known yet.");
+                }
+                let busy = w.job.is_some();
+                ui.separator();
+                ui.label(RichText::new("Backup").strong());
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(!busy && ip.is_some() && online, egui::Button::new("Back up now"))
+                        .clicked()
+                    {
+                        start = Some("backup");
+                    }
+                });
+                if let Some(dir) = &dir {
+                    ui.add(egui::Label::new(RichText::new(format!("Saved in {}", dir.display())).weak().small()).wrap());
+                }
+                if let Some(p) = &w.saved {
+                    if ui.link("Show in folder").clicked() {
+                        let _ = open::that(p.parent().unwrap_or(p));
+                    }
+                }
+                ui.separator();
+                ui.label(RichText::new("Restore").strong());
+                ui.label(RichText::new("Pick a .dmp file from Downloads, or drop one on this window.").weak());
+                let files = dir.as_deref().map(backup::list_dumps).unwrap_or_default();
+                egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                    if files.is_empty() {
+                        ui.label(RichText::new("No .dmp files in Downloads.").weak());
+                    }
+                    for f in files.iter().take(30) {
+                        let label = f.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                        let sel = w.chosen.as_deref() == Some(f.as_path());
+                        if ui.selectable_label(sel, label).clicked() {
+                            w.chosen = Some(f.clone());
+                            w.confirm = false;
+                        }
+                    }
+                });
+                if let Some(c) = &w.chosen {
+                    ui.label(format!("Chosen: {}", c.display()));
+                    if !w.confirm {
+                        if ui
+                            .add_enabled(!busy && ip.is_some() && online, egui::Button::new("Restore…"))
+                            .clicked()
+                        {
+                            w.confirm = true;
+                        }
+                    } else {
+                        ui.colored_label(
+                            ORANGE,
+                            "The device restarts with that whole configuration. A file from another \
+                             device copies its name, topic and network settings too: use one made \
+                             from this device.",
+                        );
+                        ui.horizontal(|ui| {
+                            if ui.button(RichText::new("Restore and restart").strong()).clicked() {
+                                start = Some("restore");
+                            }
+                            if ui.button("Cancel").clicked() {
+                                w.confirm = false;
+                            }
+                        });
+                    }
+                }
+                ui.separator();
+                if let Some((what, _)) = &w.job {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(if *what == "backup" { "Backing up…" } else { "Restoring…" });
+                    });
+                }
+                match &w.result {
+                    Some(Ok(msg)) => {
+                        ui.colored_label(GREEN, msg.as_str());
+                    }
+                    Some(Err(backup::BackupError::NeedsPassword)) => {
+                        ui.colored_label(ORANGE, "The device's web interface has a password: type it above and try again.");
+                    }
+                    Some(Err(e)) => {
+                        ui.colored_label(RED, e.to_string());
+                    }
+                    None => {}
+                }
+            });
+        if let (Some(what), Some(ip)) = (start, ip) {
+            if what == "restore" && self.read_only {
+                self.show_notice(READ_ONLY_NOTICE);
+                w.confirm = false;
+            } else {
+                let slot: BackupSlot = Arc::new(Mutex::new(None));
+                let out = slot.clone();
+                let pw = Some(w.password.clone()).filter(|p| !p.is_empty());
+                let chosen = w.chosen.clone();
+                let repaint = self.repaint.clone();
+                w.result = None;
+                std::thread::spawn(move || {
+                    let r = if what == "backup" {
+                        backup::download(&ip, pw.as_deref(), &fallback).and_then(|b| {
+                            let dir = backup::downloads_dir().ok_or_else(|| {
+                                backup::BackupError::Failed("No Downloads folder.".into())
+                            })?;
+                            backup::save(&dir, &b)
+                                .map(|p| p.display().to_string())
+                                .map_err(|e| backup::BackupError::Failed(e.to_string()))
+                        })
+                    } else {
+                        let data = chosen
+                            .as_deref()
+                            .ok_or_else(|| backup::BackupError::Failed("No file chosen.".into()))
+                            .and_then(|p| {
+                                std::fs::read(p)
+                                    .map_err(|e| backup::BackupError::Failed(e.to_string()))
+                            });
+                        data.and_then(|d| backup::restore(&ip, pw.as_deref(), &d))
+                            .map(|_| "Configuration restored: the device restarts.".to_string())
+                    };
+                    *out.lock().unwrap() = Some(r);
+                    repaint();
+                });
+                w.job = Some((what, slot));
+            }
+        }
+        if open {
+            self.backup_open = Some(w);
         }
     }
 
@@ -618,7 +1053,21 @@ impl DerustApp {
                             }
                         });
                     ui.separator();
-                    ui.hyperlink_to("Release page on GitHub (downloads, full notes)", &c.url);
+                    match c.download_for(github::this_platform()) {
+                        Some(d) => {
+                            ui.hyperlink_to(
+                                RichText::new(format!("Download {}", d.name)).strong(),
+                                &d.url,
+                            );
+                        }
+                        None => {
+                            ui.label(
+                                RichText::new("No download for this system in this release.")
+                                    .weak(),
+                            );
+                        }
+                    }
+                    ui.hyperlink_to("Release page on GitHub (all downloads, full notes)", &c.url);
                 }
             });
         if !open {
@@ -1000,6 +1449,26 @@ impl DerustApp {
                         drafts: Default::default(),
                     });
                 }
+                UiAction::OpenTools(key, pos) => self.tools_open = Some((key, pos, true)),
+                UiAction::OpenWifi(key) => {
+                    self.wifi_open = Some(WifiWindow {
+                        key,
+                        ssid: String::new(),
+                        password: String::new(),
+                        confirm: false,
+                    })
+                }
+                UiAction::OpenBackup(key) => {
+                    self.backup_open = Some(BackupWindow {
+                        key,
+                        password: String::new(),
+                        chosen: None,
+                        confirm: false,
+                        job: None,
+                        result: None,
+                        saved: None,
+                    })
+                }
                 UiAction::OpenWeb(url) => {
                     let _ = open::that(url);
                 }
@@ -1263,6 +1732,9 @@ impl eframe::App for DerustApp {
         self.changelog_window(&ctx);
         self.light_window(&ctx);
         self.options_window(&ctx);
+        self.tools_menu(&ctx);
+        self.wifi_window(&ctx);
+        self.backup_window(&ctx);
 
         // Keeps the uptime columns ticking.
         ctx.request_repaint_after(Duration::from_secs(1));
@@ -1414,10 +1886,10 @@ fn signal_icon(ui: &mut egui::Ui, d: &Device) {
 
 fn device_cell(ui: &mut egui::Ui, d: &Device, actions: &mut Vec<UiAction>) {
     signal_icon(ui, d);
-    if !d.set_options.is_empty() {
-        let r = gear_button(ui).on_hover_text("SetOptions");
+    if d.online != Some(false) {
+        let r = gear_button(ui).on_hover_text("SetOptions, Wi-Fi networks, backup / restore");
         if r.clicked() {
-            actions.push(UiAction::OpenOptions(d.topic.clone()));
+            actions.push(UiAction::OpenTools(d.topic.clone(), r.rect.left_bottom()));
         }
     }
     let name = d.display_name();
