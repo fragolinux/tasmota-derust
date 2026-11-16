@@ -99,6 +99,8 @@ pub struct Device {
     pub online: Option<bool>,
     /// Not reported offline, but it did not answer the status query.
     pub no_answer: bool,
+    /// Came online in the last 5 minutes: shown with a star.
+    pub new: bool,
     pub web_url: Option<String>,
     pub module: Option<String>,
     pub hostname: Option<String>,
@@ -215,6 +217,7 @@ impl From<session::DeviceInfo> for Device {
             name: d.name,
             online: d.online,
             no_answer: d.no_answer,
+            new: d.new,
             web_url: d.web_url,
             module: d.module,
             hostname: d.hostname,

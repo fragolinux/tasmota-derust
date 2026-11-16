@@ -24,6 +24,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,10 +77,16 @@ private fun viewInfo(s: Snapshot, view: View): String? = when (view) {
     else -> null
 }
 
+/** A device that came online in the last 5 minutes: amber, see-through (light and dark). */
+private val NewTint = Color(0xFFF2C21B).copy(alpha = 0.22f)
+private val StarColor = Color(0xFFF2B01B)
+
 @Composable
 private fun DeviceRow(d: Device, view: View, s: Snapshot, onOpen: () -> Unit, onToggle: (Int) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onOpen)
+        Modifier.fillMaxWidth()
+            .background(if (d.new) NewTint else Color.Transparent)
+            .clickable(onClick = onOpen)
             .alpha(if (d.isOffline) 0.55f else 1f)
             .defaultMinSize(minHeight = 58.dp)
             .padding(start = 16.dp, end = 12.dp, top = 7.dp, bottom = 7.dp),
@@ -86,10 +95,16 @@ private fun DeviceRow(d: Device, view: View, s: Snapshot, onOpen: () -> Unit, on
         SignalBars(d)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                d.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (d.new) Text(
+                    "★ ", color = StarColor, style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.semantics { contentDescription = "Came online in the last 5 minutes" },
+                )
+                Text(
+                    d.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
             val sub = subtitle(d, view)
             if (sub.isNotEmpty()) Text(
                 sub, style = MaterialTheme.typography.bodySmall,

@@ -1644,9 +1644,20 @@ impl DerustApp {
                         dim: d.is_offline(),
                         ..info_ref(&info)
                     };
-                    row.col(|ui| device_cell(ui, d, actions));
+                    let new = d.is_new();
+                    row.col(|ui| {
+                        if new {
+                            new_row_tint(ui);
+                        }
+                        device_cell(ui, d, actions)
+                    });
                     for c in &cols {
-                        row.col(|ui| cell(ui, d, *c, &ci, actions));
+                        row.col(|ui| {
+                            if new {
+                                new_row_tint(ui);
+                            }
+                            cell(ui, d, *c, &ci, actions)
+                        });
                     }
                 });
             });
@@ -2158,6 +2169,10 @@ impl eframe::App for DerustApp {
                 .default_size(200.0)
                 .show(ui, |ui| self.log_panel(ui));
         }
+        // Stars of devices that just came online fade out by themselves.
+        if self.store.devices.values().any(|d| d.is_new()) {
+            ctx.request_repaint_after(Duration::from_secs(5));
+        }
         let mut actions = Vec::new();
         egui::CentralPanel::default().show(ui, |ui| self.table(ui, &mut actions));
         self.handle_actions(actions);
@@ -2346,6 +2361,9 @@ fn device_cell(ui: &mut egui::Ui, d: &Device, actions: &mut Vec<UiAction>) {
         actions.push(UiAction::AskForget(d.topic.clone()));
     }
     let name = d.display_name();
+    if d.is_new() {
+        star_icon(ui).on_hover_text("Came online in the last 5 minutes");
+    }
     if let Some(label) = d.offline_label() {
         let why = if label == "No answer" {
             "did not answer the status query (its LWT may be stale)"
@@ -2923,6 +2941,54 @@ fn option_row(
 }
 
 /// Warning triangle with "!" (the default fonts have no ⚠).
+/// Amber, see-through: readable in the light and the dark theme.
+const NEW_TINT: Color32 = Color32::from_rgba_unmultiplied_const(0xf2, 0xc2, 0x1b, 0x38);
+
+/// Background of a device that just came online, under the cell's content.
+fn new_row_tint(ui: &mut egui::Ui) {
+    let gap = ui.spacing().item_spacing.x / 2.0;
+    let rect = ui.max_rect().expand2(vec2(gap, 0.0));
+    // The cell clips to itself: widen the clip sideways (keeping the scroll area's top and
+    // bottom) so the gaps between columns are tinted too.
+    let mut p = ui.painter().clone();
+    p.set_clip_rect(egui::Rect::from_x_y_ranges(
+        rect.x_range(),
+        ui.clip_rect().y_range(),
+    ));
+    p.rect_filled(rect, 0.0, NEW_TINT);
+}
+
+/// Painted five-pointed star (the default fonts have no ★), for devices that just came
+/// online: a pentagon plus one triangle per point, all convex.
+fn star_icon(ui: &mut egui::Ui) -> egui::Response {
+    let h = ui.text_style_height(&egui::TextStyle::Body);
+    let (rect, resp) = ui.allocate_exact_size(vec2(h, h), Sense::hover());
+    let c = rect.center();
+    let (outer, inner) = (h * 0.5, h * 0.2);
+    let at = |i: usize, r: f32| {
+        let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
+        egui::pos2(c.x + r * a.cos(), c.y + r * a.sin())
+    };
+    let p = ui.painter();
+    let inner_pts: Vec<_> = (0..5).map(|k| at(2 * k + 1, inner)).collect();
+    p.add(egui::Shape::convex_polygon(inner_pts, YELLOW, Stroke::NONE));
+    for k in 0..5 {
+        let tri = vec![
+            at((2 * k + 9) % 10, inner),
+            at(2 * k, outer),
+            at(2 * k + 1, inner),
+        ];
+        p.add(egui::Shape::convex_polygon(tri, YELLOW, Stroke::NONE));
+    }
+    p.add(egui::Shape::closed_line(
+        (0..10)
+            .map(|i| at(i, if i % 2 == 0 { outer } else { inner }))
+            .collect(),
+        Stroke::new(1.0, ORANGE),
+    ));
+    resp
+}
+
 fn warn_icon(ui: &mut egui::Ui, color: Color32) -> egui::Response {
     let h = ui.text_style_height(&egui::TextStyle::Body);
     let (rect, resp) = ui.allocate_exact_size(vec2(h, h), Sense::hover());

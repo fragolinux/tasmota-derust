@@ -83,6 +83,9 @@ th:first-child, td:first-child { position: sticky; left: 0; background: var(--pa
 th:first-child { z-index: 3; background: var(--panel-2); }
 tbody tr:nth-child(even) td { background: var(--panel-2); }
 tbody tr.offline td { color: var(--muted); }
+/* Came online in the last 5 minutes: amber tint (see-through, fine in light and dark) and a star. */
+tbody tr.new td, tbody tr.new:nth-child(even) td, .mrow.new { background: rgba(242, 194, 27, .22); }
+.star { color: #f2b01b; font-size: 1.05em; line-height: 1; text-shadow: 0 0 1px #c47a00; }
 tbody tr.offline td:first-child { font-style: italic; }
 .devname { display: inline-flex; align-items: center; gap: 8px; }
 .rssi { display: inline-block; min-width: 44px; text-align: center; border-radius: 4px; color: #111; font-weight: 600; }
@@ -487,10 +490,13 @@ function bars(d) {
   return s + "</svg>";
 }
 
+const STAR = `<span class="star" title="Came online in the last 5 minutes" aria-label="New">★</span> `;
+
 function nameHtml(d) {
+  const star = d.new ? STAR : "";
   if (d.online !== false && d.web_url)
-    return `<a href="${esc(d.web_url)}" target="_blank" rel="noopener" title="Open web UI">${esc(d.name)}</a>`;
-  return esc(d.name);
+    return `${star}<a href="${esc(d.web_url)}" target="_blank" rel="noopener" title="Open web UI">${esc(d.name)}</a>`;
+  return star + esc(d.name);
 }
 
 // words: label a single relay ON/OFF instead of "1" (phone rows and sheet).
@@ -679,7 +685,7 @@ function renderTable(list) {
   for (const c of cols) h += `<th data-sort="${c}" ${arrow(c)}>${COLS[c].t}</th>`;
   h += `</tr></thead><tbody>`;
   for (const d of list) {
-    h += `<tr class="${d.online === false ? "offline" : ""}" ${d.upgrading && d.online === false ? 'title="Upgrading: restarting…"' : ""}><td><span class="devname">${bars(d)}${nameHtml(d)}${d.online !== false && !docMode.bare ? `<button class="gear" data-act="tools" data-topic="${esc(d.topic)}" title="SetOptions, Wi-Fi networks, backup" aria-label="Device tools">⚙</button>` : ""}${d.online === false && !docMode.bare ? `<button class="gear" data-act="forget" data-topic="${esc(d.topic)}" title="Remove this offline device from the list" aria-label="Remove device">✕</button>` : ""}</span></td>`;
+    h += `<tr class="${d.online === false ? "offline" : ""}${d.new ? " new" : ""}" ${d.upgrading && d.online === false ? 'title="Upgrading: restarting…"' : ""}><td><span class="devname">${bars(d)}${nameHtml(d)}${d.online !== false && !docMode.bare ? `<button class="gear" data-act="tools" data-topic="${esc(d.topic)}" title="SetOptions, Wi-Fi networks, backup" aria-label="Device tools">⚙</button>` : ""}${d.online === false && !docMode.bare ? `<button class="gear" data-act="forget" data-topic="${esc(d.topic)}" title="Remove this offline device from the list" aria-label="Remove device">✕</button>` : ""}</span></td>`;
     for (const c of cols) h += `<td class="${COLS[c].num && !["rssi", "ap"].includes(c) ? "num" : ""}">${cellHtml(d, c)}</td>`;
     h += `</tr>`;
   }
@@ -728,9 +734,9 @@ function renderMobile(list) {
   return (info ? `<div class="minfo m-only">${info}</div>` : `<div style="height:8px"></div>`) +
     `<div class="mlist">` + list.map(d => {
       const p = rowParts(d);
-      return `<div class="mrow ${d.online === false ? "offline" : ""}" data-topic="${esc(d.topic)}">
+      return `<div class="mrow ${d.online === false ? "offline" : ""}${d.new ? " new" : ""}" data-topic="${esc(d.topic)}">
         ${bars(d)}
-        <div class="mid"><div class="mname">${esc(d.name)}</div><div class="msub">${p.raw ? p.sub : esc(p.sub)}</div></div>
+        <div class="mid"><div class="mname">${d.new ? STAR : ""}${esc(d.name)}</div><div class="msub">${p.raw ? p.sub : esc(p.sub)}</div></div>
         <div class="mright">${p.right}</div></div>`;
     }).join("") + `</div>` + forgetAllHtml();
 }

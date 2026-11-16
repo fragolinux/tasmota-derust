@@ -153,6 +153,15 @@ opened on that network could have sent it commands through a visitor's browser.
   of them (9.5.0.2) fixes the ESP32-C3 settings layout: our own report to the Tasmota
   developers listed it, but the app only stopped ESP8266 devices.
 
+### 0.8.1: spot the board you just plugged in
+
+A friend testing boards on the bench was looking at the wrong one for a while: the list grew
+by one when he plugged in a new board, but nothing said which. Now a device that comes online
+while the app is watching gets a **★ next to its name and an amber row for 5 minutes**, on the
+desktop, the web page and Android, in light and dark themes. It counts only a live "Online"
+from the device (plugged in, restarted, reconnected), not the old status the broker replays
+when the app starts.
+
 ## What each version does today
 
 All three share the same Rust core, so device handling, discovery, upgrade logic, SetOption

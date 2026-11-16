@@ -84,6 +84,9 @@ impl Upgrade {
     }
 }
 
+/// How long a device that just came online keeps its star.
+pub const NEW_FOR: Duration = Duration::from_secs(5 * 60);
+
 #[derive(Debug, Clone, Default)]
 pub struct Device {
     pub topic: String,
@@ -96,6 +99,9 @@ pub struct Device {
 
     /// What the LWT says (retained, so it can be stale). Use `is_online` / `reachable`.
     pub online: Option<bool>,
+    /// When a live (not retained) LWT "Online" came: the device was just plugged in,
+    /// restarted or reconnected while we were watching. See [`Device::is_new`].
+    pub appeared: Option<Instant>,
     /// The full status was asked since the last LWT.
     pub queried: bool,
     /// A live (not retained) message came from the device since the last LWT.
@@ -290,6 +296,11 @@ impl Device {
         } else {
             Some(parts.join("  "))
         }
+    }
+
+    /// It came online (live LWT) less than [`NEW_FOR`] ago: shown with a star.
+    pub fn is_new(&self) -> bool {
+        self.appeared.is_some_and(|t| t.elapsed() < NEW_FOR)
     }
 
     /// LWT received. Every LWT starts over: the device is asked for its full status again
@@ -739,7 +750,12 @@ impl Store {
             d.asked = None;
         }
         match (is_tele, suffix.as_str()) {
-            (true, "LWT") => d.set_online(payload.eq_ignore_ascii_case("online")),
+            (true, "LWT") => {
+                let online = payload.eq_ignore_ascii_case("online");
+                d.set_online(online);
+                // Retained LWTs replayed at connect are old news: only a live one counts.
+                d.appeared = (online && !retained).then(Instant::now);
+            }
             (true, "STATE") => {
                 if let Some(v) = &json {
                     d.parse_state(v)
@@ -1139,6 +1155,26 @@ pub fn parse_version(v: &str) -> Option<Vec<u32>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn new_only_after_a_live_online() {
+        let mut s = Store::default();
+        // Replayed at connect: not new.
+        s.handle_message("tele/old/LWT", "Online", true);
+        assert!(!s.devices["old"].is_new());
+        // Plugged in while watching: new, for NEW_FOR.
+        s.handle("tele/plug/LWT", "Online");
+        assert!(s.devices["plug"].is_new());
+        s.devices.get_mut("plug").unwrap().appeared =
+            Instant::now().checked_sub(NEW_FOR + Duration::from_secs(1));
+        assert!(!s.devices["plug"].is_new());
+        // Back online after being offline: new again; going offline ends it.
+        s.handle("tele/old/LWT", "Offline");
+        s.handle("tele/old/LWT", "Online");
+        assert!(s.devices["old"].is_new());
+        s.handle("tele/old/LWT", "Offline");
+        assert!(!s.devices["old"].is_new());
+    }
+
     use super::*;
 
     #[test]

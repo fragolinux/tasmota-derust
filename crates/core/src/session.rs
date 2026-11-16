@@ -557,6 +557,8 @@ pub struct DeviceInfo {
     pub online: Option<bool>,
     /// Not reported offline, but it did not answer the status query.
     pub no_answer: bool,
+    /// Came online in the last 5 minutes (just plugged in, restarted or reconnected).
+    pub new: bool,
     pub web_url: Option<String>,
     pub module: Option<String>,
     pub hostname: Option<String>,
@@ -686,6 +688,7 @@ impl DeviceInfo {
             name: d.display_name().to_string(),
             online: d.reachable(),
             no_answer: d.no_answer(),
+            new: d.is_new(),
             web_url: d.web_url(),
             module: d.module.clone(),
             hostname: d.hostname.clone(),
