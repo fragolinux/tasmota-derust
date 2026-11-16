@@ -296,7 +296,13 @@ jobs:
   release:
     name: Publish the release
     needs: [check, macos, windows, linux-windows, android, scan]
-    if: github.ref_type == 'tag' && !cancelled() && !failure()
+    # Every build must have succeeded: a cancelled job (e.g. no macOS runner) is neither a
+    # failure nor a cancelled workflow, and v0.8.0 went out without its macOS files that way.
+    if: >-
+      github.ref_type == 'tag' && !cancelled() &&
+      needs.check.result == 'success' && needs.macos.result == 'success' &&
+      needs.windows.result == 'success' && needs.linux-windows.result == 'success' &&
+      needs.android.result == 'success' && needs.scan.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
