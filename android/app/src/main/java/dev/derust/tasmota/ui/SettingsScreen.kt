@@ -44,7 +44,9 @@ import androidx.compose.ui.unit.dp
 import dev.derust.tasmota.BrokerSettings
 import dev.derust.tasmota.ThemeMode
 import dev.derust.tasmota.core.aboutText
-import dev.derust.tasmota.core.repoUrl
+import dev.derust.tasmota.core.siteUrl
+import androidx.compose.foundation.clickable
+import dev.derust.tasmota.ui.theme.Orange
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -153,25 +155,58 @@ fun SettingsScreen(
             if (appUpdate != null) {
                 TextButton(onClick = { showNotes = appUpdate }) { Text("Version $appUpdate is available: what changed") }
             }
-            TextButton(onClick = { uri.openUri(repoUrl()) }) { Text("Source code and downloads") }
+            TextButton(onClick = { uri.openUri(siteUrl()) }) { Text("Website and downloads") }
             showNotes?.let { v -> ChangelogDialog(v, onClose = { showNotes = null }) }
         }
     }
 }
 
-/** What the app is, with the way to its release notes and source code. */
+/**
+ * About: first the latest release (download + what changed, loaded here, no browser needed),
+ * then its release page, what the app is, and the project website.
+ */
 @Composable
-fun AboutDialog(version: String?, onNotes: () -> Unit, onClose: () -> Unit) {
+fun AboutDialog(version: String?, latest: String?, onClose: () -> Unit) {
     val uri = LocalUriHandler.current
+    val target = latest ?: version
+    var notes by remember(target) { mutableStateOf<Changelog?>(null) }
+    LaunchedEffect(target) { if (target != null) notes = withContext(Dispatchers.IO) { changelog(target) } }
+    val newer = latest != null && version != null && latest != version
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Tasmota Derust ${version ?: ""}") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text(aboutText())
-                Spacer(Modifier.padding(top = 8.dp))
-                TextButton(onClick = onNotes, enabled = version != null) { Text("What changed in this version") }
-                TextButton(onClick = { uri.openUri(repoUrl()) }) { Text("Source code and downloads") }
+                Text(
+                    when {
+                        newer -> "Version $latest is available"
+                        latest != null -> "You have the latest version"
+                        else -> "This version"
+                    },
+                    fontWeight = FontWeight.Bold,
+                    color = if (newer) Orange else MaterialTheme.colorScheme.onSurface,
+                )
+                val n = notes
+                n?.apkUrl?.let { apk ->
+                    Button(onClick = { uri.openUri(apk) }, modifier = Modifier.padding(vertical = 6.dp)) {
+                        Text("Download ${n.apkName ?: "the APK"}")
+                    }
+                }
+                when {
+                    target == null -> {}
+                    n == null -> Text("Loading what changed…", style = MaterialTheme.typography.bodySmall)
+                    n.error != null -> Text(n.error!!, style = MaterialTheme.typography.bodySmall)
+                    else -> n.sections.forEach { sec ->
+                        Text(sec.title, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp))
+                        sec.items.forEach { Text("• $it", style = MaterialTheme.typography.bodyMedium) }
+                    }
+                }
+                if (n != null) {
+                    LinkText("Release page") { uri.openUri(n.url) }
+                }
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                Text(aboutText(), style = MaterialTheme.typography.bodyMedium)
+                LinkText("Website: screenshots, guides, all downloads") { uri.openUri(siteUrl()) }
                 Text(
                     "Theme (light / dark) and the MQTT broker are in Settings.",
                     style = MaterialTheme.typography.bodySmall,
@@ -180,6 +215,18 @@ fun AboutDialog(version: String?, onNotes: () -> Unit, onClose: () -> Unit) {
             }
         },
         confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
+    )
+}
+
+/** A link inside dialog text: aligned with the text around it, never clipped. */
+@Composable
+private fun LinkText(text: String, onClick: () -> Unit) {
+    Text(
+        text,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.SemiBold,
+        style = MaterialTheme.typography.bodyLarge,
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
     )
 }
 

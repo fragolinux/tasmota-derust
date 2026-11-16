@@ -185,6 +185,15 @@ impl Session {
             Latest::Loading => (None, None),
         };
         let targets = self.targets();
+        // One lock at a time: two guards of the same mutex in one expression deadlock.
+        let (app_update, app_latest) = {
+            let l = self.app_latest.lock().unwrap();
+            let v = match &*l {
+                Latest::Ok(v) => Some(v.clone()),
+                _ => None,
+            };
+            (github::app_update(&l), v)
+        };
         let s = self.shared.lock().unwrap();
         let devices = s
             .store
@@ -202,7 +211,8 @@ impl Session {
             .collect();
         Snapshot {
             app_version: env!("CARGO_PKG_VERSION"),
-            app_update: github::app_update(&self.app_latest.lock().unwrap()),
+            app_update,
+            app_latest,
             app_releases: github::APP_RELEASES,
             connected: s.connected,
             status: s.status.clone(),
@@ -647,6 +657,8 @@ pub struct Snapshot {
     pub app_version: &'static str,
     /// A newer Tasmota Derust release, when there is one.
     pub app_update: Option<String>,
+    /// The latest published Tasmota Derust release, when known.
+    pub app_latest: Option<String>,
     pub app_releases: &'static str,
     pub connected: bool,
     pub status: String,

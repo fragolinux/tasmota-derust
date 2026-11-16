@@ -30,3 +30,6 @@ Free and open source (MIT or Apache-2.0).";
 
 /// Source code, issues and downloads.
 pub const REPO_URL: &str = "https://github.com/fragolinux/tasmota-derust";
+
+/// Project website (GitHub Pages, from `docs/`): what it is, screenshots, downloads.
+pub const SITE_URL: &str = "https://fragolinux.github.io/tasmota-derust/";

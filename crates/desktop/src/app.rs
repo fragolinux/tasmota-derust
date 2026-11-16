@@ -157,6 +157,8 @@ pub struct DerustApp {
     /// Changelog popup: version and its notes (None while loading).
     changelog: Option<(String, ChangelogSlot)>,
     about_open: bool,
+    /// What changed in the latest release (or this one), loaded when About opens.
+    about_notes: Option<(String, ChangelogSlot)>,
     options_open: Option<OptionsWindow>,
     wifi_open: Option<WifiWindow>,
     backup_open: Option<BackupWindow>,
@@ -195,6 +197,7 @@ impl DerustApp {
             notice: None,
             changelog: None,
             about_open: false,
+            about_notes: None,
             light_open: None,
             options_open: None,
             wifi_open: None,
@@ -1029,18 +1032,96 @@ impl DerustApp {
         self.changelog = Some((version.to_string(), slot));
     }
 
+    /// About: first the latest release (download + what changed, read here), then its release
+    /// page, what the app is, the theme and the project website.
     fn about_window(&mut self, ctx: &egui::Context) {
         if !self.about_open {
+            self.about_notes = None;
             return;
         }
+        let mine = env!("CARGO_PKG_VERSION");
+        let latest = match &*self.app_latest.lock().unwrap() {
+            Latest::Ok(v) => Some(v.clone()),
+            _ => None,
+        };
+        let target = latest.clone().unwrap_or_else(|| mine.to_string());
+        if self.about_notes.as_ref().is_none_or(|(v, _)| *v != target) {
+            let slot = Arc::new(Mutex::new(None));
+            let (out, v, c) = (slot.clone(), target.clone(), ctx.clone());
+            std::thread::spawn(move || {
+                *out.lock().unwrap() = Some(github::changelog(&v));
+                c.request_repaint();
+            });
+            self.about_notes = Some((target.clone(), slot));
+        }
+        let slot = self
+            .about_notes
+            .as_ref()
+            .map(|(_, s)| s.clone())
+            .expect("set above");
+        let newer = latest.as_deref().is_some_and(|l| l != mine);
         let mut open = true;
-        let mut notes = false;
         egui::Window::new(concat!("Tasmota Derust ", env!("CARGO_PKG_VERSION")))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
-            .default_width(460.0)
+            .default_width(480.0)
             .show(ctx, |ui| {
+                if newer {
+                    ui.label(
+                        RichText::new(format!("Version {target} is available"))
+                            .strong()
+                            .color(ORANGE),
+                    );
+                } else if latest.is_some() {
+                    ui.label(RichText::new("You have the latest version").strong());
+                } else {
+                    ui.label(RichText::new("This version").strong());
+                }
+                match &*slot.lock().unwrap() {
+                    None => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Loading what changed…");
+                        });
+                    }
+                    Some(Err(e)) => {
+                        ui.colored_label(RED, e.as_str());
+                    }
+                    Some(Ok(c)) => {
+                        match c.download_for(github::this_platform()) {
+                            Some(d) => {
+                                ui.hyperlink_to(
+                                    RichText::new(format!("Download {}", d.name)).strong(),
+                                    &d.url,
+                                );
+                            }
+                            None => {
+                                ui.label(
+                                    RichText::new("No download for this system in this release.")
+                                        .weak(),
+                                );
+                            }
+                        }
+                        ui.add_space(4.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(220.0)
+                            .show(ui, |ui| {
+                                for sec in &c.sections {
+                                    ui.label(RichText::new(&sec.title).strong());
+                                    for item in &sec.items {
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label("•");
+                                            ui.label(item.as_str());
+                                        });
+                                    }
+                                    ui.add_space(4.0);
+                                }
+                            });
+                        ui.hyperlink_to("Release page", &c.url);
+                    }
+                }
+                ui.separator();
                 for p in tasmota_derust_core::ABOUT.split("\n\n") {
                     ui.label(p);
                     ui.add_space(4.0);
@@ -1058,17 +1139,11 @@ impl DerustApp {
                     }
                 });
                 ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.link("What changed in this version").clicked() {
-                        notes = true;
-                    }
-                    ui.label("·");
-                    ui.hyperlink_to("Source code and downloads", tasmota_derust_core::REPO_URL);
-                });
+                ui.hyperlink_to(
+                    "Website: screenshots, guides, all downloads",
+                    tasmota_derust_core::SITE_URL,
+                );
             });
-        if notes {
-            self.open_changelog(ctx, env!("CARGO_PKG_VERSION"));
-        }
         if !open {
             self.about_open = false;
         }

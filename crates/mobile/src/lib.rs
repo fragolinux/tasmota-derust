@@ -193,6 +193,8 @@ pub struct UpgradePlan {
 pub struct Snapshot {
     /// A newer Tasmota Derust release, when there is one.
     pub app_update: Option<String>,
+    /// The latest published Tasmota Derust release, when known (checked every hour).
+    pub app_latest: Option<String>,
     pub app_releases: String,
     pub connected: bool,
     pub status: String,
@@ -320,6 +322,7 @@ impl Session {
             broker: s.broker,
             read_only: s.read_only,
             app_update: s.app_update,
+            app_latest: s.app_latest,
             app_releases: s.app_releases.to_string(),
             latest: s.latest,
             latest_dev: s.latest_dev,
@@ -573,6 +576,11 @@ pub fn about_text() -> String {
 #[uniffi::export]
 pub fn repo_url() -> String {
     tasmota_derust_core::REPO_URL.to_string()
+}
+
+#[uniffi::export]
+pub fn site_url() -> String {
+    tasmota_derust_core::SITE_URL.to_string()
 }
 
 #[uniffi::export]

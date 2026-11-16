@@ -46,6 +46,7 @@ static INDEX: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     INDEX_HTML
         .replace("@ABOUT@", &about)
         .replace("@FAVICON@", &favicon)
+        .replace("@SITE@", tasmota_derust_core::SITE_URL)
 });
 
 #[derive(Clone)]
