@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -127,9 +128,20 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             TopAppBar(
                 title = {
                     Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Tasmota Derust", fontWeight = FontWeight.SemiBold, fontSize = 20.sp, maxLines = 1)
-                            Spacer(Modifier.width(6.dp))
+                        // Flow, so with large phone fonts the version pill and the update link go
+                        // to the next line whole instead of cutting the title or the version.
+                        FlowRow(
+                            itemVerticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            BasicText(
+                                "Tasmota Derust", maxLines = 1, softWrap = false,
+                                style = LocalTextStyle.current.copy(
+                                    color = LocalContentColor.current, fontWeight = FontWeight.SemiBold,
+                                ),
+                                autoSize = TextAutoSize.StepBased(minFontSize = 12.sp, maxFontSize = 20.sp),
+                            )
                             // A tappable pill, so it reads as a button: opens About (what the
                             // app is, what changed, theme).
                             Row(
@@ -151,7 +163,7 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
                             }
                             snap?.appUpdate?.let { v ->
                                 Text(
-                                    "  Update $v", fontSize = 13.sp, maxLines = 1, color = Orange,
+                                    "Update $v", fontSize = 13.sp, maxLines = 1, color = Orange,
                                     fontWeight = FontWeight.SemiBold,
                                     modifier = Modifier.clickable { showNotes = v },
                                 )
