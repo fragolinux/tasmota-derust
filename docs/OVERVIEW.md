@@ -126,7 +126,7 @@ every state and the full log.
 - About opens on the latest release (download for your system and what changed), and the
   project got a **website** with screenshots and downloads.
 
-### Next release: a safer web server, and ESP32 upgrades
+### 0.8.0: a safer web server, and ESP32 upgrades
 
 Prompted by a security report
 ([issue #1](https://github.com/fragolinux/tasmota-derust/issues/1)): the standalone web
