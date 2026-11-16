@@ -1,6 +1,10 @@
 package dev.derust.tasmota.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.foundation.text.TextAutoSize
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -124,7 +128,14 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
                         selected = vm.view == v,
                         onClick = { vm.selectView(v) },
                         icon = { Icon(v.icon, null) },
-                        label = { Text(v.title) },
+                        // One line, smaller when the phone's font size needs it ("Firmware" wrapped).
+                        label = {
+                            BasicText(
+                                v.title, maxLines = 1, softWrap = false,
+                                style = LocalTextStyle.current.copy(color = LocalContentColor.current),
+                                autoSize = TextAutoSize.StepBased(minFontSize = 8.sp, maxFontSize = LocalTextStyle.current.fontSize),
+                            )
+                        },
                     )
                 }
             }
