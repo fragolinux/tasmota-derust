@@ -970,7 +970,7 @@ impl Store {
         let plan = crate::ota::plan(
             d.version.as_deref(),
             d.ota_url.as_deref(),
-            crate::ota::is_esp32(d),
+            crate::ota::esp32_build(d).as_deref(),
             targets.release.as_deref(),
         );
         let (target, step) = match plan {

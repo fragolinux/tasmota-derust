@@ -2,9 +2,11 @@
 //!
 //! From the Tasmota docs (Upgrading > Upgrade Flow): old firmware must go through
 //! 5.14.0 → 6.7.1 → 7.2.0 → 8.5.1 → 9.1 → current release, one step at a time, using the
-//! binaries linked there. ESP8266 devices older than 10.0.0.3 also stop at 16.0.0 once a newer
-//! release is out: 16.0.0 is the last release that still migrates their settings (the
-//! development branch dropped every settings step older than 10.0.0.3). `.gz` images work from 8.2 on. If an image does not fit in the free
+//! binaries linked there. Devices older than 10.0.0.3 (ESP8266 and ESP32 alike) also stop at
+//! 16.0.0 once a newer release is out: 16.0.0 is the last release that still migrates their
+//! settings (the development branch dropped every settings step older than 10.0.0.3, the
+//! 9.2–9.5 ones shared by every chip and the ESP32-C3 layout fix at 9.5.0.2 among them).
+//! `.gz` images work from 8.2 on. If an image does not fit in the free
 //! flash, Tasmota first installs `<name>-minimal.bin` from the same folder by itself, then the
 //! image. Firmware older than 4.2.0 can't do it over the air (the next files are only on
 //! GitHub, over https).
@@ -21,6 +23,32 @@ use serde::Serialize;
 use crate::device::{Device, parse_version, short_version};
 
 pub const OTA_BASE: &str = "http://ota.tasmota.com/tasmota/";
+/// Same server, ESP32 images (`.bin` only).
+pub const OTA_BASE32: &str = "http://ota.tasmota.com/tasmota32/";
+
+/// ESP32 images in `tasmota32/release-16.0.0/` (safeboot images left out): the milestone
+/// uses the device's own build when it is one of these, the chip's plain build otherwise.
+const ESP32_BUILDS_16: &[&str] = &[
+    "tasmota32",
+    "tasmota32-bluetooth",
+    "tasmota32-display",
+    "tasmota32-ir",
+    "tasmota32-lvgl",
+    "tasmota32-nspanel",
+    "tasmota32-webcam",
+    "tasmota32-zbbrdgpro",
+    "tasmota32c2",
+    "tasmota32c3",
+    "tasmota32c5",
+    "tasmota32c6",
+    "tasmota32c61",
+    "tasmota32p4",
+    "tasmota32p4r3",
+    "tasmota32s2",
+    "tasmota32s2cdc",
+    "tasmota32s3",
+    "tasmota32solo1",
+];
 /// `.gz` firmware images are accepted from this version on.
 pub const GZ_SINCE: [u32; 2] = [8, 2];
 /// Older firmware can't follow the path over the air.
@@ -117,15 +145,17 @@ pub fn minimal_url(url: &str) -> String {
 
 fn is_path_url(url: &str) -> bool {
     url.starts_with(&format!("{OTA_BASE}release-{}/", fmt_ver(MILESTONE)))
+        || url.starts_with(&format!("{OTA_BASE32}release-{}/", fmt_ver(MILESTONE)))
         || PATH.iter().any(|s| {
             url == format!("{OTA_BASE}{}", s.file)
                 || s.file_gz.is_some_and(|g| url == format!("{OTA_BASE}{g}"))
         })
 }
 
-/// The milestone is needed: an ESP8266 whose settings are older than 10.0.0.3, when the latest
-/// release is newer than 16.0.0 (or not known: better one step too many than missed migrations).
-fn needs_milestone(v: &[u32], esp32: bool, latest: Option<&str>) -> bool {
+/// The milestone is needed: a device (any chip) whose settings are older than 10.0.0.3, when
+/// the latest release is newer than 16.0.0 (or not known: better one step too many than
+/// missed migrations).
+fn needs_milestone(v: &[u32], latest: Option<&str>) -> bool {
     let mut full = [0u32; 4];
     for (i, x) in v.iter().take(4).enumerate() {
         full[i] = *x;
@@ -133,7 +163,61 @@ fn needs_milestone(v: &[u32], esp32: bool, latest: Option<&str>) -> bool {
     let newer = latest
         .and_then(parse_version)
         .is_none_or(|l| ver3(&l) > MILESTONE);
-    !esp32 && full < MILESTONE_BELOW && newer
+    full < MILESTONE_BELOW && newer
+}
+
+/// The ESP32 build to install on `d`, or None for an ESP8266: the build in its version tag
+/// (`9.5.0(tasmota32c3)`), with the chip from `Hardware` (`ESP32-C3`) when the tag is the
+/// plain `tasmota32` or missing.
+pub fn esp32_build(d: &Device) -> Option<String> {
+    if !is_esp32(d) {
+        return None;
+    }
+    let tag = d
+        .version
+        .as_deref()
+        .and_then(|v| v.split_once('('))
+        .map(|(_, t)| {
+            t.trim_end_matches(')')
+                .trim_start_matches("release-")
+                .to_ascii_lowercase()
+        })
+        .filter(|t| {
+            t.starts_with("tasmota32")
+                && !t.ends_with("-safeboot")
+                && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+    let chip = d.hardware.as_deref().and_then(|h| {
+        let rest = h.to_ascii_lowercase();
+        let rest = rest.strip_prefix("esp32-")?;
+        let model: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect();
+        ["c2", "c3", "c5", "c6", "c61", "s2", "s3", "p4"]
+            .contains(&model.as_str())
+            .then(|| format!("tasmota32{model}"))
+    });
+    Some(match (tag, chip) {
+        (Some(t), Some(c)) if t == "tasmota32" => c,
+        (Some(t), _) => t,
+        (None, Some(c)) => c,
+        (None, None) => "tasmota32".into(),
+    })
+}
+
+/// The build for the 16.0.0 archive: `build` when the archive has it, else the plain
+/// build of the same chip (`tasmota32c3-sensors` → `tasmota32c3`).
+fn esp32_build_16(build: &str) -> String {
+    if ESP32_BUILDS_16.contains(&build) {
+        return build.into();
+    }
+    let chip = build.split('-').next().unwrap_or("tasmota32");
+    if ESP32_BUILDS_16.contains(&chip) {
+        chip.into()
+    } else {
+        "tasmota32".into()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -162,10 +246,11 @@ pub enum Plan {
 }
 
 /// `latest`: the latest release, to know whether the 16.0.0 milestone is needed.
+/// `esp32`: the device's ESP32 build ([`esp32_build`]), None for an ESP8266.
 pub fn plan(
     version: Option<&str>,
     ota_url: Option<&str>,
-    esp32: bool,
+    esp32: Option<&str>,
     latest: Option<&str>,
 ) -> Plan {
     let Some(version) = version else {
@@ -175,7 +260,7 @@ pub fn plan(
         return Plan::Unknown;
     };
     let v = ver3(&full);
-    if v < PATH_END && esp32 {
+    if v < PATH_END && esp32.is_some() {
         return Plan::Manual(
             "ESP32 with firmware older than 9.1: upgrade it with the Tasmota web installer or by serial.".into(),
         );
@@ -188,7 +273,7 @@ pub fn plan(
         ));
     }
     let remaining: Vec<&PathStep> = PATH.iter().filter(|s| s.version > v).collect();
-    let milestone = needs_milestone(&full, esp32, latest);
+    let milestone = needs_milestone(&full, latest);
     let total = remaining.len() + usize::from(milestone) + 1;
     if let Some(step) = remaining.first() {
         let gz_ok = [v[0], v[1]] >= GZ_SINCE;
@@ -206,15 +291,23 @@ pub fn plan(
         };
     }
     if milestone {
-        // Every path image is 9.1 or newer here: .gz is fine.
-        return Plan::Step {
-            target: MILESTONE,
-            url: format!(
+        // Every path image is 9.1 or newer here: .gz is fine (ESP32 images are .bin only).
+        let url = match esp32 {
+            Some(b) => format!(
+                "{OTA_BASE32}release-{}/{}.bin",
+                fmt_ver(MILESTONE),
+                esp32_build_16(b)
+            ),
+            None => format!(
                 "{OTA_BASE}release-{}/{}.bin.gz",
                 fmt_ver(MILESTONE),
                 final_build(version)
             ),
-            gz: true,
+        };
+        return Plan::Step {
+            target: MILESTONE,
+            gz: url.ends_with(".gz"),
+            url,
             index: 1,
             total,
             milestone: true,
@@ -224,8 +317,10 @@ pub fn plan(
         .is_some_and(|u| !u.trim().is_empty() && !is_path_url(u) && !u.contains("thehackbox.org"));
     let set_url = if own_ok {
         None
-    } else if esp32 {
-        Some("http://ota.tasmota.com/tasmota32/release/tasmota32.bin".to_string())
+    } else if let Some(b) = esp32 {
+        // The chip's plain build: always published, whatever variants a release has.
+        let chip = b.split('-').next().unwrap_or("tasmota32");
+        Some(format!("{OTA_BASE32}release/{chip}.bin"))
     } else {
         Some(format!("{OTA_BASE}release/{}.bin.gz", final_build(version)))
     };
@@ -453,7 +548,8 @@ fn kb(bytes: u64) -> u64 {
 }
 
 pub fn plan_info(d: &Device, targets: &Targets, sizes: &Sizes) -> PlanInfo {
-    let esp32 = is_esp32(d);
+    let build32 = esp32_build(d);
+    let esp32 = build32.is_some();
     let status = version_status(d.version.as_deref(), d.ota_url.as_deref(), targets);
     let current = d
         .version
@@ -466,7 +562,7 @@ pub fn plan_info(d: &Device, targets: &Targets, sizes: &Sizes) -> PlanInfo {
     match plan(
         d.version.as_deref(),
         d.ota_url.as_deref(),
-        esp32,
+        build32.as_deref(),
         targets.release.as_deref(),
     ) {
         Plan::Unknown => PlanInfo {
@@ -662,7 +758,7 @@ mod tests {
 
     /// Latest release newer than the milestone (the usual case from now on).
     fn step(version: &str) -> Plan {
-        plan(Some(version), None, false, Some("16.1.0"))
+        plan(Some(version), None, None, Some("16.1.0"))
     }
 
     #[test]
@@ -740,27 +836,90 @@ mod tests {
         assert!(matches!(step("12.0.2(tasmota)"), Plan::Final { .. }));
         // Latest is 16.0.0 itself: no extra step.
         assert!(matches!(
-            plan(Some("9.1.0(lite)"), None, false, Some("16.0.0")),
+            plan(Some("9.1.0(lite)"), None, None, Some("16.0.0")),
             Plan::Final { .. }
         ));
         // Latest not known: stop at 16.0.0 to be safe.
         assert!(matches!(
-            plan(Some("9.1.0(lite)"), None, false, None),
+            plan(Some("9.1.0(lite)"), None, None, None),
             Plan::Step {
                 milestone: true,
                 ..
             }
         ));
-        // ESP32: unchanged.
+        // ESP32 too (the 9.2–9.5 steps are shared, 9.5.0.2 fixes the C3 layout): the
+        // 16.0.0 image of its own build, .bin.
+        let m32 = |version: &str, build: &str| match plan(
+            Some(version),
+            None,
+            Some(build),
+            Some("16.1.0"),
+        ) {
+            Plan::Step {
+                url,
+                gz,
+                milestone: true,
+                target,
+                ..
+            } => {
+                assert_eq!(target, MILESTONE);
+                assert!(!gz);
+                url
+            }
+            other => panic!("{version} {build}: {other:?}"),
+        };
+        assert_eq!(
+            m32("9.5.0(tasmota32)", "tasmota32"),
+            "http://ota.tasmota.com/tasmota32/release-16.0.0/tasmota32.bin"
+        );
+        assert!(m32("9.5.0.2(tasmota32c3)", "tasmota32c3").ends_with("/tasmota32c3.bin"));
+        assert!(
+            m32("10.0.0(tasmota32-bluetooth)", "tasmota32-bluetooth")
+                .ends_with("/tasmota32-bluetooth.bin")
+        );
+        // A build the 16.0.0 archive does not have: the plain image of the same chip.
+        assert!(
+            m32("9.5.0(tasmota32c3-sensors)", "tasmota32c3-sensors").ends_with("/tasmota32c3.bin")
+        );
+        assert!(m32("9.5.0(tasmota32-knx)", "tasmota32-knx").ends_with("/tasmota32.bin"));
+        // Settings 10.0.0.3 or newer, or latest is 16.0.0: no milestone.
         assert!(matches!(
-            plan(Some("9.5.0(tasmota32)"), None, true, Some("16.1.0")),
+            plan(
+                Some("10.0.0.3(tasmota32)"),
+                None,
+                Some("tasmota32"),
+                Some("16.1.0")
+            ),
             Plan::Final { .. }
         ));
+        assert!(matches!(
+            plan(
+                Some("9.5.0(tasmota32)"),
+                None,
+                Some("tasmota32"),
+                Some("16.0.0")
+            ),
+            Plan::Final { .. }
+        ));
+        // On 16.0.0 from the ESP32 milestone: back to the release channel of its chip.
+        assert_eq!(
+            plan(
+                Some("16.0.0(release-tasmota32c3)"),
+                Some("http://ota.tasmota.com/tasmota32/release-16.0.0/tasmota32c3.bin"),
+                Some("tasmota32c3"),
+                Some("16.1.0"),
+            ),
+            Plan::Final {
+                set_url: Some(format!("{OTA_BASE32}release/tasmota32c3.bin")),
+                index: 1,
+                total: 1
+            }
+        );
         // On 16.0.0 from the milestone: the OtaUrl goes back to the release channel.
         let p = plan(
             Some("16.0.0(release-tasmota)"),
             Some("http://ota.tasmota.com/tasmota/release-16.0.0/tasmota.bin.gz"),
-            false,
+            None,
             Some("16.1.0"),
         );
         assert_eq!(
@@ -774,13 +933,47 @@ mod tests {
     }
 
     #[test]
+    fn esp32_build_from_tag_and_hardware() {
+        let dev = |version: &str, hardware: Option<&str>| {
+            esp32_build(&Device {
+                version: Some(version.into()),
+                hardware: hardware.map(Into::into),
+                ..Default::default()
+            })
+        };
+        assert_eq!(dev("9.5.0(tasmota)", Some("ESP8266EX")), None);
+        assert_eq!(
+            dev("9.5.0(tasmota32)", Some("ESP32-D0WDQ6")).as_deref(),
+            Some("tasmota32")
+        );
+        assert_eq!(
+            dev("9.5.0(tasmota32)", Some("ESP32-C3")).as_deref(),
+            Some("tasmota32c3")
+        );
+        assert_eq!(
+            dev("12.0.0(release-tasmota32s3)", Some("ESP32-S3")).as_deref(),
+            Some("tasmota32s3")
+        );
+        assert_eq!(
+            dev("9.5.0(tasmota32-bluetooth)", Some("ESP32-D0WD-V3")).as_deref(),
+            Some("tasmota32-bluetooth")
+        );
+        assert_eq!(
+            dev("9.5.0", Some("ESP32-S2")).as_deref(),
+            Some("tasmota32s2")
+        );
+        assert_eq!(esp32_build_16("tasmota32c3-sensors"), "tasmota32c3");
+        assert_eq!(esp32_build_16("tasmota32-odroidgo"), "tasmota32");
+    }
+
+    #[test]
     fn too_old_or_unknown() {
         assert!(matches!(step("3.9.22"), Plan::Manual(_)));
         assert!(matches!(
-            plan(Some("8.5.1(tasmota32)"), None, true, None),
+            plan(Some("8.5.1(tasmota32)"), None, Some("tasmota32"), None),
             Plan::Manual(_)
         ));
-        assert_eq!(plan(None, None, false, None), Plan::Unknown);
+        assert_eq!(plan(None, None, None, None), Plan::Unknown);
     }
 
     #[test]
@@ -789,7 +982,7 @@ mod tests {
         let p = plan(
             Some("9.1.0(lite)"),
             Some("http://ota.tasmota.com/tasmota/release-9.1.0/tasmota-lite.bin.gz"),
-            false,
+            None,
             Some("16.0.0"),
         );
         assert_eq!(
@@ -803,7 +996,7 @@ mod tests {
         // Its own OtaUrl is kept.
         let own = "http://ota.tasmota.com/tasmota/release/tasmota-sensors.bin.gz";
         assert_eq!(
-            plan(Some("15.0.1(sensors)"), Some(own), false, Some("16.0.0")),
+            plan(Some("15.0.1(sensors)"), Some(own), None, Some("16.0.0")),
             Plan::Final {
                 set_url: None,
                 index: 1,
@@ -814,7 +1007,7 @@ mod tests {
         let p = plan(
             Some("9.2.0(sensors)"),
             Some("http://thehackbox.org/tasmota/release/tasmota.bin"),
-            false,
+            None,
             Some("16.0.0"),
         );
         assert_eq!(
