@@ -48,7 +48,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         .flatMapLatest<Session?, Snapshot?> { s ->
             if (s == null) flowOf(null) else flow {
                 while (true) {
-                    emit(runCatching { s.snapshot() }.getOrNull())
+                    emit(runCatching { s.snapshot() }.onFailure { android.util.Log.w("derust", "snapshot failed", it) }.getOrNull())
                     delay(1000)
                 }
             }

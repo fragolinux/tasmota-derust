@@ -10,9 +10,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -106,12 +106,9 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
     val appVersion = remember {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull()
     }
-    // Release notes shown for this version (the running one, or the available update).
-    var showNotes by remember { mutableStateOf<String?>(null) }
-    showNotes?.let { v -> ChangelogDialog(v, onClose = { showNotes = null }) }
     var showAbout by remember { mutableStateOf(false) }
     if (showAbout) {
-        AboutDialog(appVersion, onNotes = { showAbout = false; showNotes = appVersion }, onClose = { showAbout = false })
+        AboutDialog(appVersion, snap?.appLatest, onClose = { showAbout = false })
     }
 
     val files = rememberDeviceFiles(vm)
@@ -125,62 +122,58 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        // Flow, so with large phone fonts the version pill and the update link go
-                        // to the next line whole instead of cutting the title or the version.
-                        FlowRow(
-                            itemVerticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
-                        ) {
-                            BasicText(
-                                "Tasmota Derust", maxLines = 1, softWrap = false,
-                                style = LocalTextStyle.current.copy(
-                                    color = LocalContentColor.current, fontWeight = FontWeight.SemiBold,
-                                ),
-                                autoSize = TextAutoSize.StepBased(minFontSize = 12.sp, maxFontSize = 20.sp),
-                            )
-                            // A tappable pill, so it reads as a button: opens About (what the
-                            // app is, what changed, theme).
-                            Row(
-                                Modifier.clip(RoundedCornerShape(50))
-                                    .background(MaterialTheme.colorScheme.secondaryContainer)
-                                    .clickable { showAbout = true }
-                                    .padding(start = 5.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(
-                                    Icons.Info, "About Tasmota Derust", Modifier.size(14.dp),
-                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                )
-                                Spacer(Modifier.width(3.dp))
-                                Text(
-                                    appVersion?.let { "v$it" } ?: "About", fontSize = 12.sp, maxLines = 1,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                )
-                            }
-                            snap?.appUpdate?.let { v ->
-                                Text(
-                                    "Update $v", fontSize = 13.sp, maxLines = 1, color = Orange,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.clickable { showNotes = v },
-                                )
-                            }
+            Column {
+                // Line 1: the title and the three buttons, centred on the same line.
+                TopAppBar(
+                    title = {
+                        BasicText(
+                            "Tasmota Derust", maxLines = 1, softWrap = false,
+                            style = LocalTextStyle.current.copy(
+                                color = LocalContentColor.current, fontWeight = FontWeight.SemiBold,
+                            ),
+                            autoSize = TextAutoSize.StepBased(minFontSize = 12.sp, maxFontSize = 22.sp),
+                        )
+                    },
+                    actions = {
+                        IconButton(onClick = { if (vm.readOnly) askUnlock = false else vm.changeReadOnly(true) }) {
+                            if (vm.readOnly) Icon(Icons.Lock, "Read-only on: tap to allow commands", tint = Orange)
+                            else Icon(Icons.Unlock, "Commands allowed: tap for read-only", tint = Red)
                         }
-                        ConnectionLine(snap?.connected, snap?.status, vm.readOnly)
+                        IconButton(onClick = vm::refresh, enabled = snap?.connected == true) { Icon(Icons.Refresh, "Refresh") }
+                        IconButton(onClick = onSettings) { Icon(Icons.Settings, "Settings") }
+                    },
+                )
+                // Line 2: version (and update), connection, read-only, on one line whatever the
+                // font size: only the connection text shrinks.
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // A tappable pill, so it reads as a button: opens About (latest version,
+                    // what changed, download, what the app is). With an update it says so.
+                    val update = snap?.appUpdate
+                    Row(
+                        Modifier.clip(RoundedCornerShape(50))
+                            .background(if (update != null) Orange else MaterialTheme.colorScheme.secondaryContainer)
+                            .clickable { showAbout = true }
+                            .padding(start = 6.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val fg = if (update != null) OnStatus else MaterialTheme.colorScheme.onSecondaryContainer
+                        Icon(Icons.Info, "About Tasmota Derust", Modifier.size(13.dp), tint = fg)
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            buildString {
+                                append(appVersion?.let { "v$it" } ?: "About")
+                                if (update != null) append(" → $update")
+                            },
+                            fontSize = 12.sp, maxLines = 1, softWrap = false, fontWeight = FontWeight.SemiBold, color = fg,
+                        )
                     }
-                },
-                actions = {
-                    IconButton(onClick = { if (vm.readOnly) askUnlock = false else vm.changeReadOnly(true) }) {
-                        if (vm.readOnly) Icon(Icons.Lock, "Read-only on: tap to allow commands", tint = Orange)
-                        else Icon(Icons.Unlock, "Commands allowed: tap for read-only", tint = Red)
-                    }
-                    IconButton(onClick = vm::refresh, enabled = snap?.connected == true) { Icon(Icons.Refresh, "Refresh") }
-                    IconButton(onClick = onSettings) { Icon(Icons.Settings, "Settings") }
-                },
-            )
+                    Spacer(Modifier.width(10.dp))
+                    ConnectionLine(snap?.connected, snap?.status, vm.readOnly)
+                }
+            }
         },
         bottomBar = {
             NavigationBar {
@@ -341,8 +334,8 @@ private val View.icon get() = when (this) {
 }
 
 @Composable
-private fun ConnectionLine(connected: Boolean?, status: String?, readOnly: Boolean?) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+private fun RowScope.ConnectionLine(connected: Boolean?, status: String?, readOnly: Boolean?) {
+    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier.size(8.dp).background(
                 when (connected) { true -> Green; false -> Red; null -> MaterialTheme.colorScheme.outline },
@@ -358,8 +351,8 @@ private fun ConnectionLine(connected: Boolean?, status: String?, readOnly: Boole
         if (readOnly == true) {
             Spacer(Modifier.width(8.dp))
             Text(
-                "Read-only", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = OnStatus,
-                modifier = Modifier.background(Orange, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 1.dp),
+                "Read-only", fontSize = 12.sp, maxLines = 1, softWrap = false, fontWeight = FontWeight.SemiBold, color = OnStatus,
+                modifier = Modifier.background(Orange, RoundedCornerShape(50)).padding(horizontal = 8.dp, vertical = 2.dp),
             )
         }
     }
