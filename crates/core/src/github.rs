@@ -1,7 +1,9 @@
-//! Latest official Tasmota release, fetched once in the background.
+//! Latest Tasmota release / development build and latest Tasmota Derust release, checked
+//! in the background at start and then every hour.
 
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 pub enum Latest {
@@ -13,27 +15,65 @@ pub enum Latest {
 /// Latest development build: the version in tasmota_version.h on the development branch
 /// (what ota.tasmota.com/tasmota/ serves), e.g. 0x10000004 → "16.0.0.4".
 pub fn fetch_latest_dev(notify: crate::Notify) -> Arc<Mutex<Latest>> {
+    poll(notify, || {
+        let text = ureq::get(
+            "https://raw.githubusercontent.com/arendst/Tasmota/development/tasmota/include/tasmota_version.h",
+        )
+        .header("User-Agent", "tasmota-derust")
+        .call()
+        .map_err(|e| e.to_string())?
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
+        parse_version_header(&text)
+            .ok_or_else(|| "no TASMOTA_VERSION in tasmota_version.h".to_string())
+    })
+}
+
+/// How often the latest versions are asked again, so a running app sees new releases.
+pub const POLL_EVERY: Duration = Duration::from_secs(60 * 60);
+/// After a failed check (no network yet, rate limit), try again sooner.
+const RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
+
+/// Runs `fetch` now and then every [`POLL_EVERY`] in a background thread, calling `notify`
+/// after each answer. A failure after a success keeps the last known version. The thread
+/// ends once nobody holds the returned state any more.
+fn poll(
+    notify: crate::Notify,
+    fetch: impl Fn() -> Result<String, String> + Send + 'static,
+) -> Arc<Mutex<Latest>> {
     let state = Arc::new(Mutex::new(Latest::Loading));
-    let out = state.clone();
+    let weak = Arc::downgrade(&state);
     thread::spawn(move || {
-        let result = (|| -> Result<String, String> {
-            let text = ureq::get(
-                "https://raw.githubusercontent.com/arendst/Tasmota/development/tasmota/include/tasmota_version.h",
-            )
-            .header("User-Agent", "tasmota-derust")
-            .call()
-            .map_err(|e| e.to_string())?
-            .body_mut()
-            .read_to_string()
-            .map_err(|e| e.to_string())?;
-            parse_version_header(&text)
-                .ok_or_else(|| "no TASMOTA_VERSION in tasmota_version.h".to_string())
-        })();
-        *out.lock().unwrap() = match result {
-            Ok(v) => Latest::Ok(v),
-            Err(e) => Latest::Err(e),
-        };
-        notify();
+        loop {
+            let result = fetch();
+            let Some(out) = weak.upgrade() else { return };
+            let wait = {
+                let mut cur = out.lock().unwrap();
+                match result {
+                    Ok(v) => {
+                        *cur = Latest::Ok(v);
+                        POLL_EVERY
+                    }
+                    Err(e) => {
+                        if !matches!(*cur, Latest::Ok(_)) {
+                            *cur = Latest::Err(e);
+                        }
+                        RETRY_AFTER
+                    }
+                }
+            };
+            drop(out);
+            notify();
+            // Sleep in short steps, so a dropped session does not keep the thread for an hour.
+            let until = Instant::now() + wait;
+            while Instant::now() < until {
+                thread::sleep(Duration::from_secs(30));
+                if weak.strong_count() == 0 {
+                    return;
+                }
+            }
+        }
     });
     state
 }
@@ -82,28 +122,18 @@ pub fn fetch_latest(notify: crate::Notify) -> Arc<Mutex<Latest>> {
 
 /// tag_name of a GitHub "latest release", without the leading v.
 fn fetch_tag(url: &'static str, notify: crate::Notify) -> Arc<Mutex<Latest>> {
-    let state = Arc::new(Mutex::new(Latest::Loading));
-    let out = state.clone();
-    thread::spawn(move || {
-        let result = (|| -> Result<String, String> {
-            let mut resp = ureq::get(url)
-                .header("User-Agent", "tasmota-derust")
-                .header("Accept", "application/vnd.github+json")
-                .call()
-                .map_err(|e| e.to_string())?;
-            let v: serde_json::Value = resp.body_mut().read_json().map_err(|e| e.to_string())?;
-            v.get("tag_name")
-                .and_then(|t| t.as_str())
-                .map(|t| t.trim_start_matches(['v', 'V']).to_string())
-                .ok_or_else(|| "no tag_name in response".to_string())
-        })();
-        *out.lock().unwrap() = match result {
-            Ok(v) => Latest::Ok(v),
-            Err(e) => Latest::Err(e),
-        };
-        notify();
-    });
-    state
+    poll(notify, move || {
+        let mut resp = ureq::get(url)
+            .header("User-Agent", "tasmota-derust")
+            .header("Accept", "application/vnd.github+json")
+            .call()
+            .map_err(|e| e.to_string())?;
+        let v: serde_json::Value = resp.body_mut().read_json().map_err(|e| e.to_string())?;
+        v.get("tag_name")
+            .and_then(|t| t.as_str())
+            .map(|t| t.trim_start_matches(['v', 'V']).to_string())
+            .ok_or_else(|| "no tag_name in response".to_string())
+    })
 }
 
 // ------------------------------------------------------------------ changelog
