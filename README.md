@@ -69,7 +69,7 @@ specifically requested by the user or the person installing or operating it. It 
 connects to the MQTT broker you configure (and to your devices' own web pages when you open
 them), asks GitHub for the version numbers of the latest Tasmota release and development
 build (to mark outdated firmware) and of the latest Tasmota Derust release (to say when a
-newer one is out) and its release notes when you open them, asks ota.tasmota.com for the size of a firmware image before an
+newer one is out; at start and then once an hour) and its release notes when you open them, asks ota.tasmota.com for the size of a firmware image before an
 upgrade step, talks to a device's own web server when you back it up or restore it, and downloads the SetOption descriptions from the Tasmota documentation on
 GitHub the first time you open a SetOptions window. Nothing about you or your devices is sent anywhere.
 
@@ -83,6 +83,10 @@ GitHub the first time you open a SetOptions window. Nothing about you or your de
   buttons; a colour wheel and sliders set colour, brightness, white temperature and white
   (`HSBColor`, `Dimmer`, `CT`, `White`), each only when the light has it.
 - Show or hide devices that the broker knows about but that are currently offline.
+- **Remove offline devices**, one (✕ next to the name, *Remove from list* on the phone) or all at
+  once (*Remove offline*): they leave the list and the retained messages the broker keeps for
+  them (last will, discovery…) are cleared, so they do not come back. A device that comes back
+  online shows up again by itself. Not in read-only mode.
 - Per-view column chooser (show/hide, reorder), saved between runs.
 - Click a device name to open its web UI.
 - Telemetry column with the main live value (power in W, temperature, humidity).
@@ -127,7 +131,7 @@ GitHub the first time you open a SetOptions window. Nothing about you or your de
 - Message log panel for troubleshooting.
 - **About**: the version (*About · vX* bottom right on the desktop, the ⓘ link on the web page,
   the ⓘ pill next to the title on Android) says what the app is and opens the list of changes
-  of that release, and of a newer one when it is out, with the download for the system in use
+  of that release, and of a newer one when it is out (checked every hour, no restart needed), with the download for the system in use
   next to the link to the release page.
 - **Light, dark or system theme**: in the About window on the desktop and on the web page, in
   Settings on Android.

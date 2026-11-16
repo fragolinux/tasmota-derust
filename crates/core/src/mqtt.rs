@@ -95,6 +95,13 @@ impl Mqtt {
             .try_publish(topic, QoS::AtMostOnce, false, payload.as_bytes().to_vec());
     }
 
+    /// Deletes the retained message on `topic` (an empty retained publish).
+    pub fn clear_retained(&self, topic: &str) {
+        let _ = self
+            .client
+            .try_publish(topic, QoS::AtLeastOnce, true, Vec::<u8>::new());
+    }
+
     /// Adds a subscription that is also restored after reconnects.
     pub fn subscribe(&self, topic: &str) {
         let mut extra = self.extra_topics.lock().unwrap();

@@ -13,7 +13,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -74,6 +74,8 @@ pub fn router(session: Arc<Session>, read_only_hint: &str) -> Router {
         .route("/api/state", get(api_state))
         .route("/api/changelog/{version}", get(api_changelog))
         .route("/api/refresh", post(api_refresh))
+        .route("/api/devices/{topic}", delete(api_forget))
+        .route("/api/forget-offline", post(api_forget_offline))
         .route("/api/devices/{topic}/power/{n}", post(api_power))
         .route("/api/devices/{topic}/ap/{n}", post(api_ap))
         .route("/api/devices/{topic}/upgrade", post(api_upgrade))
@@ -242,7 +244,8 @@ fn reply(st: &AppState, r: Result<(), CommandError>) -> Response {
             | CommandError::OtherUpgradeRunning
             | CommandError::UpgradeNotPossible
             | CommandError::NotOfficialOtaUrl
-            | CommandError::NotALight,
+            | CommandError::NotALight
+            | CommandError::NotOffline,
         ) => StatusCode::CONFLICT,
         Err(
             CommandError::NoSuchRelay
@@ -398,6 +401,24 @@ async fn api_restore(
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
         Ok(Err(e)) => backup_error(e),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Removes an offline device and clears its retained messages on the broker.
+async fn api_forget(State(st): State<AppState>, Path(topic): Path<String>) -> Response {
+    reply(&st, st.session.forget(&topic))
+}
+
+#[derive(serde::Serialize)]
+struct Removed {
+    removed: usize,
+}
+
+/// Removes every offline device; answers how many.
+async fn api_forget_offline(State(st): State<AppState>) -> Response {
+    match st.session.forget_offline() {
+        Ok(n) => Json(Removed { removed: n }).into_response(),
+        Err(e) => reply(&st, Err(e)),
     }
 }
 

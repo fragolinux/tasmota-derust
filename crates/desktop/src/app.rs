@@ -42,11 +42,19 @@ enum Conn {
     Error(String),
 }
 
+const FORGET_TEXT: &str = "It is removed from the list, and the messages the broker keeps for it \
+    (its last will, discovery…) are deleted, so it is not listed again.";
+const FORGET_BACK: &str = "If the device comes back online, it shows up again by itself.";
+
 enum Confirm {
     Upgrade(String),
     SwitchAp(String, i64),
     /// Device, option, new value.
     SetOption(String, u16, u32),
+    /// Remove an offline device and clear its retained messages.
+    Forget(String),
+    /// The same for every offline device.
+    ForgetOffline,
 }
 
 /// Wi-Fi networks window of one device: the slot being edited and what was typed.
@@ -97,6 +105,8 @@ enum UiAction {
     OpenBackup(String),
     /// The gear's menu, at that screen position.
     OpenTools(String, egui::Pos2),
+    AskForget(String),
+    AskForgetOffline,
     Sort(Option<Col>),
 }
 
@@ -285,6 +295,12 @@ impl DerustApp {
                     if let Some(m) = &self.mqtt {
                         m.subscribe(&topic);
                     }
+                }
+                Action::ClearRetained(topic) => {
+                    if let Some(m) = &self.mqtt {
+                        m.clear_retained(&topic);
+                    }
+                    self.push_log('>', &topic, "(retained message cleared)");
                 }
             }
         }
@@ -1152,6 +1168,18 @@ impl DerustApp {
             {
                 self.cfg.save();
             }
+            let offline = self.offline_keys().len();
+            if self.cfg.show_offline
+                && offline > 0
+                && ui
+                    .button(format!("Remove offline ({offline})"))
+                    .on_hover_text(
+                        "Remove the offline devices from the list and clear what the broker keeps for them",
+                    )
+                    .clicked()
+            {
+                self.handle_actions(vec![UiAction::AskForgetOffline]);
+            }
             self.columns_menu(ui);
             if ui
                 .button("Refresh")
@@ -1455,6 +1483,8 @@ impl DerustApp {
                 | UiAction::AskUpgrade(_)
                 | UiAction::AskAp(..)
                 | UiAction::SetChannel(..)
+                | UiAction::AskForget(_)
+                | UiAction::AskForgetOffline
                     if self.read_only =>
                 {
                     self.show_notice(READ_ONLY_NOTICE);
@@ -1516,6 +1546,8 @@ impl DerustApp {
                     let _ = open::that(url);
                 }
                 UiAction::AskUpgrade(key) => self.confirm = Some(Confirm::Upgrade(key)),
+                UiAction::AskForget(key) => self.confirm = Some(Confirm::Forget(key)),
+                UiAction::AskForgetOffline => self.confirm = Some(Confirm::ForgetOffline),
                 UiAction::AskAp(key, n) => self.confirm = Some(Confirm::SwitchAp(key, n)),
                 UiAction::Sort(c) => {
                     if self.sort == c {
@@ -1585,10 +1617,94 @@ impl DerustApp {
         }
     }
 
+    /// Removes an offline device; the actions clear its retained messages on the broker.
+    fn forget_actions(&mut self, key: &str) -> Vec<Action> {
+        match self.store.forget(key) {
+            Some(a) => {
+                self.push_log('*', "removed", key);
+                a
+            }
+            None => {
+                self.show_notice("Only offline devices can be removed.");
+                Vec::new()
+            }
+        }
+    }
+
+    fn offline_keys(&self) -> Vec<String> {
+        self.store
+            .devices
+            .iter()
+            .filter(|(_, d)| d.reachable() == Some(false))
+            .map(|(k, _)| k.clone())
+            .collect()
+    }
+
+    fn forget_offline_dialog(&mut self, ctx: &egui::Context) {
+        let keys = self.offline_keys();
+        if keys.is_empty() {
+            self.confirm = None;
+            return;
+        }
+        let mut names: Vec<String> = keys
+            .iter()
+            .take(12)
+            .map(|k| self.store.devices[k].display_name().to_string())
+            .collect();
+        if keys.len() > 12 {
+            names.push(format!("… ({} more)", keys.len() - 12));
+        }
+        let mut result = None;
+        let resp = egui::Modal::new(egui::Id::unique("confirm-forget")).show(ctx, |ui| {
+            ui.set_max_width(520.0);
+            let n = keys.len();
+            ui.heading(format!(
+                "Remove {n} offline device{}?",
+                if n > 1 { "s" } else { "" }
+            ));
+            ui.add_space(6.0);
+            ui.label(names.join(", "));
+            ui.add_space(6.0);
+            ui.label(FORGET_TEXT);
+            ui.add_space(6.0);
+            ui.label(RichText::new(FORGET_BACK).weak());
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button(RichText::new("Remove all").strong()).clicked() {
+                    result = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    result = Some(false);
+                }
+            });
+        });
+        if result.is_none() && resp.should_close() {
+            result = Some(false);
+        }
+        match result {
+            Some(true) if self.read_only => {
+                self.confirm = None;
+                self.show_notice(READ_ONLY_NOTICE);
+            }
+            Some(true) => {
+                self.confirm = None;
+                let actions: Vec<Action> =
+                    keys.iter().flat_map(|k| self.forget_actions(k)).collect();
+                self.apply(actions);
+            }
+            Some(false) => self.confirm = None,
+            None => {}
+        }
+    }
+
     fn confirm_dialog(&mut self, ctx: &egui::Context) {
         let Some(confirm) = &self.confirm else { return };
         let key = match confirm {
-            Confirm::Upgrade(k) | Confirm::SwitchAp(k, _) | Confirm::SetOption(k, ..) => k.clone(),
+            Confirm::Upgrade(k)
+            | Confirm::SwitchAp(k, _)
+            | Confirm::SetOption(k, ..)
+            | Confirm::Forget(k) => k.clone(),
+            Confirm::ForgetOffline => return self.forget_offline_dialog(ctx),
         };
         let Some(d) = self.store.devices.get(&key) else {
             self.confirm = None;
@@ -1693,6 +1809,15 @@ impl DerustApp {
                     }
                     "Change"
                 }
+                Confirm::Forget(_) => {
+                    ui.heading(format!("Remove {}?", d.display_name()));
+                    ui.add_space(6.0);
+                    ui.label(FORGET_TEXT);
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(FORGET_BACK).weak());
+                    "Remove"
+                }
+                Confirm::ForgetOffline => unreachable!("own dialog"),
             };
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -1738,7 +1863,8 @@ impl DerustApp {
                         .into_iter()
                         .collect(),
                     Some(Confirm::SetOption(k, n, v)) => self.set_option_actions(&k, n, v),
-                    None => Vec::new(),
+                    Some(Confirm::Forget(k)) => self.forget_actions(&k),
+                    Some(Confirm::ForgetOffline) | None => Vec::new(),
                 };
                 self.apply(actions);
             }
@@ -1943,6 +2069,13 @@ fn device_cell(ui: &mut egui::Ui, d: &Device, actions: &mut Vec<UiAction>) {
         if r.clicked() {
             actions.push(UiAction::OpenTools(d.topic.clone(), r.rect.left_bottom()));
         }
+    }
+    if d.reachable() == Some(false)
+        && remove_button(ui)
+            .on_hover_text("Remove this offline device from the list")
+            .clicked()
+    {
+        actions.push(UiAction::AskForget(d.topic.clone()));
     }
     let name = d.display_name();
     if let Some(label) = d.offline_label() {
@@ -2543,6 +2676,27 @@ fn warn_icon(ui: &mut egui::Ui, color: Color32) -> egui::Response {
         FontId::proportional(h * 0.7),
         Color32::BLACK,
     );
+    resp
+}
+
+/// Small ✕ button (painted, like the gear).
+fn remove_button(ui: &mut egui::Ui) -> egui::Response {
+    let h = ui.text_style_height(&egui::TextStyle::Body);
+    let (rect, resp) = ui.allocate_exact_size(vec2(h, h), Sense::click());
+    let color = if resp.hovered() {
+        RED
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let c = rect.center();
+    let r = h * 0.25;
+    let stroke = Stroke::new(h * 0.12, color);
+    let p = ui.painter();
+    p.line_segment([c + vec2(-r, -r), c + vec2(r, r)], stroke);
+    p.line_segment([c + vec2(-r, r), c + vec2(r, -r)], stroke);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
     resp
 }
 

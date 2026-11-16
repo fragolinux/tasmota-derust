@@ -248,6 +248,7 @@ dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding
 .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 .gear { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 14px; }
 .gear:hover { color: var(--accent); }
+.forget-all { display: flex; justify-content: center; padding: 16px 0 8px; }
 @media (max-width: 760px) {
   dialog#optDlg { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 16px 16px 0 0; border: 0; }
   .opt-wrap { max-height: 90vh; }
@@ -291,6 +292,7 @@ dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding
   <div class="row controls d-only">
     <input type="search" id="search" placeholder="Search devices" autocomplete="off">
     <label class="check"><input type="checkbox" id="showOffline"> Show offline</label>
+    <span id="forgetAllSlot"></span>
     <details class="menu" id="colsMenu">
       <summary class="btn">Columns</summary>
       <div class="menu-body" id="colsBody"></div>
@@ -638,6 +640,7 @@ function render() {
   const mo = $("mOffline");
   mo.textContent = `Offline ${offline}`;
   mo.classList.toggle("on", ui.showOffline);
+  $("forgetAllSlot").innerHTML = forgetAllHtml();
   if ($("sheet").open) renderSheet();
 
   const list = visibleDevices();
@@ -663,7 +666,7 @@ function renderTable(list) {
   for (const c of cols) h += `<th data-sort="${c}" ${arrow(c)}>${COLS[c].t}</th>`;
   h += `</tr></thead><tbody>`;
   for (const d of list) {
-    h += `<tr class="${d.online === false ? "offline" : ""}" ${d.upgrading && d.online === false ? 'title="Upgrading: restarting…"' : ""}><td><span class="devname">${bars(d)}${nameHtml(d)}${d.online !== false && !docMode.bare ? `<button class="gear" data-act="tools" data-topic="${esc(d.topic)}" title="SetOptions, Wi-Fi networks, backup" aria-label="Device tools">⚙</button>` : ""}</span></td>`;
+    h += `<tr class="${d.online === false ? "offline" : ""}" ${d.upgrading && d.online === false ? 'title="Upgrading: restarting…"' : ""}><td><span class="devname">${bars(d)}${nameHtml(d)}${d.online !== false && !docMode.bare ? `<button class="gear" data-act="tools" data-topic="${esc(d.topic)}" title="SetOptions, Wi-Fi networks, backup" aria-label="Device tools">⚙</button>` : ""}${d.online === false && !docMode.bare ? `<button class="gear" data-act="forget" data-topic="${esc(d.topic)}" title="Remove this offline device from the list" aria-label="Remove device">✕</button>` : ""}</span></td>`;
     for (const c of cols) h += `<td class="${COLS[c].num && !["rssi", "ap"].includes(c) ? "num" : ""}">${cellHtml(d, c)}</td>`;
     h += `</tr>`;
   }
@@ -716,7 +719,14 @@ function renderMobile(list) {
         ${bars(d)}
         <div class="mid"><div class="mname">${esc(d.name)}</div><div class="msub">${p.raw ? p.sub : esc(p.sub)}</div></div>
         <div class="mright">${p.right}</div></div>`;
-    }).join("") + `</div>`;
+    }).join("") + `</div>` + forgetAllHtml();
+}
+
+// "Remove N offline devices", shown while offline devices are listed.
+function forgetAllHtml() {
+  const n = data.devices.filter(d => d.online === false).length;
+  return ui.showOffline && n && !docMode.bare
+    ? `<div class="forget-all"><button class="btn" data-forget-all="1">Remove ${n} offline device${n > 1 ? "s" : ""}</button></div>` : "";
 }
 
 function renderMobileChrome() {
@@ -765,6 +775,7 @@ function renderSheet() {
   if (!off) h += `<button class="btn" data-act="wifi" data-topic="${esc(d.topic)}">Wi-Fi networks</button>
     <button class="btn" data-act="backup" data-topic="${esc(d.topic)}">Back up</button>
     <button class="btn" data-act="restore" data-topic="${esc(d.topic)}">Restore</button>`;
+  if (off) h += `<button class="btn" data-act="forget" data-topic="${esc(d.topic)}">Remove from list</button>`;
   h += updateHtml(d) + `</div>`;
   for (const [title, cols] of SECTIONS) {
     const rows = cols.map(c => [c, sheetValue(d, c)]).filter(([, v]) => v !== "");
@@ -806,9 +817,9 @@ function toast(msg) {
   clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("show"), 3500);
 }
 
-async function post(url) {
+async function post(url, method = "POST") {
   try {
-    const r = await fetch(url, { method: "POST" });
+    const r = await fetch(url, { method });
     if (!r.ok) toast(await r.text() || `Error ${r.status}`);
   } catch (e) { toast("Server not reachable"); }
   setTimeout(load, 400);
@@ -832,6 +843,15 @@ async function onAction(btn) {
   if (data.read_only) return readOnlyNotice();
   const base = `/api/devices/${encodeURIComponent(t)}`;
   if (btn.dataset.act === "power") return post(`${base}/power/${btn.dataset.n}`);
+
+  if (btn.dataset.act === "forget") {
+    const ok = await confirmDialog(`Remove ${d.name}?`,
+      `<p>It is removed from the list, and the messages the broker keeps for it (its last will, discovery…) are deleted, so it is not listed again.</p>
+       <p style="color:var(--muted)">If the device comes back online, it shows up again by itself.</p>`,
+      "Remove");
+    if (ok) { if ($("sheet").open) $("sheet").close(); post(base, "DELETE"); }
+    return;
+  }
 
   if (btn.dataset.act === "ap") {
     const to = +btn.dataset.n, from = d.ap;
@@ -991,6 +1011,18 @@ async function showChangelog(version) {
   await confirmDialog(`Tasmota Derust ${version}`, body, "Close", true);
 }
 
+async function forgetAll() {
+  if (data.read_only) return readOnlyNotice();
+  const off = data.devices.filter(d => d.online === false);
+  const names = off.slice(0, 12).map(d => esc(d.name)).join(", ") + (off.length > 12 ? `, … (${off.length - 12} more)` : "");
+  const ok = await confirmDialog(`Remove ${off.length} offline device${off.length > 1 ? "s" : ""}?`,
+    `<p>${names}</p>
+     <p>${off.length > 1 ? "They are" : "It is"} removed from the list, and the messages the broker keeps for ${off.length > 1 ? "them" : "it"} (last will, discovery…) are deleted.</p>
+     <p style="color:var(--muted)">A device that comes back online shows up again by itself.</p>`,
+    "Remove all");
+  if (ok) post("/api/forget-offline");
+}
+
 // ---------------------------------------------------------------- events
 document.addEventListener("click", e => {
   if (e.target.closest("[data-about]")) { e.preventDefault(); showAbout(); return; }
@@ -1010,6 +1042,7 @@ document.addEventListener("click", e => {
   }
   const act = e.target.closest("[data-act]");
   if (act && !act.disabled) { onAction(act); return; }
+  if (e.target.closest("[data-forget-all]")) { forgetAll(); return; }
   // Tapping a phone row opens its sheet, but not when the tap was on a relay, AP chips or a link.
   const row = e.target.closest(".mrow[data-topic]");
   if (row && !e.target.closest("button, a, .ap")) { openSheet(row.dataset.topic); return; }

@@ -163,6 +163,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun switchAp(topic: String, ap: Int) = command("Switching Wi-Fi…") { it.switchAp(topic, ap.toUByte()) }
 
     fun upgrade(topic: String) = command("Upgrade started") { it.upgrade(topic) }
+    fun forget(topic: String) = command("Device removed") { it.forget(topic) }
+    fun forgetOffline() = command(null) { s ->
+        val n = s.forgetOffline().toInt()
+        _messages.tryEmit(if (n == 1) "1 device removed" else "$n devices removed")
+    }
 
     fun setDimmer(topic: String, v: Long) = command(null) { it.setDimmer(topic, v) }
     fun setHsb(topic: String, h: Long, s: Long, b: Long) = command(null) { it.setHsb(topic, h, s, b) }

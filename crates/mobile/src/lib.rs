@@ -35,6 +35,7 @@ pub enum CommandError {
     NotALight,
     OptionBlocked,
     BadOption,
+    NotOffline,
     Wifi(tasmota_derust_core::wifi::WifiError),
 }
 
@@ -54,6 +55,7 @@ impl CommandError {
             CommandError::NotALight => E::NotALight,
             CommandError::OptionBlocked => E::OptionBlocked,
             CommandError::BadOption => E::BadOption,
+            CommandError::NotOffline => E::NotOffline,
             CommandError::Wifi(w) => E::Wifi(*w),
         }
     }
@@ -83,6 +85,7 @@ impl From<session::CommandError> for CommandError {
             E::NotALight => CommandError::NotALight,
             E::OptionBlocked => CommandError::OptionBlocked,
             E::BadOption => CommandError::BadOption,
+            E::NotOffline => CommandError::NotOffline,
             E::Wifi(w) => CommandError::Wifi(w),
         }
     }
@@ -340,6 +343,16 @@ impl Session {
     /// Restarts the device on SSId `n` (1 or 2).
     pub fn switch_ap(&self, topic: String, n: u8) -> Result<(), CommandError> {
         Ok(self.inner.switch_ap(&topic, n)?)
+    }
+
+    /// Removes an offline device and clears its retained messages on the broker.
+    pub fn forget(&self, topic: String) -> Result<(), CommandError> {
+        Ok(self.inner.forget(&topic)?)
+    }
+
+    /// Removes every offline device; returns how many.
+    pub fn forget_offline(&self) -> Result<u32, CommandError> {
+        Ok(self.inner.forget_offline()? as u32)
     }
 
     pub fn upgrade(&self, topic: String) -> Result<(), CommandError> {

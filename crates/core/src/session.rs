@@ -51,6 +51,8 @@ pub enum CommandError {
     /// SetOption value refused: it would cut the device off from this app.
     OptionBlocked,
     BadOption,
+    /// Only devices that are offline (or not answering) can be removed.
+    NotOffline,
     Wifi(crate::wifi::WifiError),
 }
 
@@ -75,6 +77,7 @@ impl CommandError {
                 "This value would cut the device off from this app: change it from the device's web UI or console."
             }
             CommandError::BadOption => "No such SetOption, or value out of range.",
+            CommandError::NotOffline => "Only offline devices can be removed.",
             CommandError::Wifi(e) => e.message(),
         }
     }
@@ -218,6 +221,54 @@ impl Session {
     pub fn refresh(&self) {
         let actions = self.shared.lock().unwrap().store.refresh_all();
         run_actions(&self.mqtt, actions);
+    }
+
+    /// Removes an offline device from the list and clears its retained messages on the
+    /// broker (that is a write to the broker, so not in read-only mode).
+    pub fn forget(&self, topic: &str) -> Result<(), CommandError> {
+        if self.read_only() {
+            return Err(CommandError::ReadOnly);
+        }
+        let actions = {
+            let mut s = self.shared.lock().unwrap();
+            if !s.store.devices.contains_key(topic) {
+                return Err(CommandError::UnknownDevice);
+            }
+            s.store.forget(topic).ok_or(CommandError::NotOffline)?
+        };
+        run_actions(&self.mqtt, actions);
+        (self.notify)();
+        Ok(())
+    }
+
+    /// [`Session::forget`] for every device that is not reachable. Returns how many.
+    pub fn forget_offline(&self) -> Result<usize, CommandError> {
+        if self.read_only() {
+            return Err(CommandError::ReadOnly);
+        }
+        let actions = {
+            let mut s = self.shared.lock().unwrap();
+            let keys: Vec<String> = s
+                .store
+                .devices
+                .iter()
+                .filter(|(_, d)| d.reachable() == Some(false))
+                .map(|(k, _)| k.clone())
+                .collect();
+            let mut n = 0;
+            let mut actions = Vec::new();
+            for k in &keys {
+                if let Some(a) = s.store.forget(k) {
+                    n += 1;
+                    actions.extend(a);
+                }
+            }
+            (n, actions)
+        };
+        let (n, actions) = actions;
+        run_actions(&self.mqtt, actions);
+        (self.notify)();
+        Ok(n)
     }
 
     /// Checks that a state-changing command is allowed for this device.
@@ -472,6 +523,7 @@ fn run_actions(mqtt: &Mqtt, actions: Vec<Action>) {
         match a {
             Action::Publish { topic, payload } => mqtt.publish(&topic, &payload),
             Action::Subscribe(topic) => mqtt.subscribe(&topic),
+            Action::ClearRetained(topic) => mqtt.clear_retained(&topic),
         }
     }
 }

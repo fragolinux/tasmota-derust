@@ -27,8 +27,13 @@ fn default_prefixes() -> [String; 3] {
 
 #[derive(Debug, Clone)]
 pub enum Action {
-    Publish { topic: String, payload: String },
+    Publish {
+        topic: String,
+        payload: String,
+    },
     Subscribe(String),
+    /// Deletes a retained message on the broker (empty retained publish).
+    ClearRetained(String),
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +149,9 @@ pub struct Device {
     pub set_options: Vec<String>,
     /// This device's SSId1 / SSId2 (`StatusLOG.SSId`, or the answer to `SSId<n>`).
     pub ssids: [Option<String>; 2],
+    /// Topics the broker keeps a retained message on for this device (LWT, discovery…):
+    /// what [`Store::forget`] clears so a removed device does not come back.
+    pub retained_topics: std::collections::BTreeSet<String>,
 }
 
 impl Device {
@@ -662,10 +670,16 @@ impl Store {
         let mut out = Vec::new();
 
         if let Some(rest) = topic.strip_prefix("tasmota/discovery/") {
-            if rest.ends_with("/config") {
-                if let Some(key) = self.handle_discovery(payload, &mut out) {
-                    self.query_if_needed(&key, &mut out);
+            if rest.ends_with("/config")
+                && let Some(key) = self.handle_discovery(payload, &mut out)
+            {
+                if retained && let Some(d) = self.devices.get_mut(&key) {
+                    d.retained_topics.insert(topic.to_string());
+                    // Tasmota also retains its sensors message next to the config.
+                    let base = topic.trim_end_matches("config");
+                    d.retained_topics.insert(format!("{base}sensors"));
                 }
+                self.query_if_needed(&key, &mut out);
             }
             return out;
         }
@@ -716,6 +730,9 @@ impl Store {
         let Some(d) = self.devices.get_mut(&key) else {
             return out;
         };
+        if retained && !payload.is_empty() {
+            d.retained_topics.insert(topic.to_string());
+        }
         let is_lwt = is_tele && suffix == "LWT";
         if !is_lwt && !retained {
             d.answered = true;
@@ -759,6 +776,22 @@ impl Store {
 
         self.query_if_needed(&key, &mut out);
         out
+    }
+
+    /// Removes a device that is not reachable, and clears the retained messages the broker
+    /// keeps for it, or it would be listed again on the next connection. A device that comes
+    /// back online announces itself again. `None`: unknown device or still reachable.
+    pub fn forget(&mut self, key: &str) -> Option<Vec<Action>> {
+        if self.devices.get(key)?.reachable() != Some(false) {
+            return None;
+        }
+        let d = self.devices.remove(key)?;
+        Some(
+            d.retained_topics
+                .into_iter()
+                .map(Action::ClearRetained)
+                .collect(),
+        )
     }
 
     /// Asks for the full status once per LWT, unless the device is reported offline.
@@ -1215,6 +1248,49 @@ mod tests {
         s.handle("stat/plug/STATUS0", &status_fwr("13.3.0(tasmota32)"));
         assert!(s.devices["plug"].is_online());
         assert!(s.command("plug", "POWER1", "TOGGLE").is_some());
+    }
+
+    #[test]
+    fn forget_offline_clears_retained() {
+        let mut s = Store::default();
+        s.handle_message(
+            "tasmota/discovery/AABBCCDDEEFF/config",
+            r#"{"t":"old","ft":"%prefix%/%topic%/","dn":"Old"}"#,
+            true,
+        );
+        s.handle_message("tele/old/LWT", "Offline", true);
+        s.handle_message("stat/old/POWER", "ON", true);
+        s.handle("tele/live/LWT", "Online");
+        s.handle("stat/live/STATUS0", &status_fwr("15.0.0(tasmota)"));
+
+        assert!(s.forget("live").is_none(), "online devices stay");
+        assert!(s.forget("nope").is_none());
+        let out = s.forget("old").expect("offline device removed");
+        let mut cleared: Vec<&str> = out
+            .iter()
+            .map(|a| match a {
+                Action::ClearRetained(t) => t.as_str(),
+                _ => panic!("only clears"),
+            })
+            .collect();
+        cleared.sort();
+        assert_eq!(
+            cleared,
+            [
+                "stat/old/POWER",
+                "tasmota/discovery/AABBCCDDEEFF/config",
+                "tasmota/discovery/AABBCCDDEEFF/sensors",
+                "tele/old/LWT",
+            ]
+        );
+        assert!(!s.devices.contains_key("old"));
+        // The broker echoes the empty retained messages: they must not bring it back.
+        s.handle("tele/old/LWT", "");
+        s.handle("tasmota/discovery/AABBCCDDEEFF/config", "");
+        assert!(!s.devices.contains_key("old"));
+        // Back online: listed again.
+        s.handle("tele/old/LWT", "Online");
+        assert!(s.devices.contains_key("old"));
     }
 
     #[test]

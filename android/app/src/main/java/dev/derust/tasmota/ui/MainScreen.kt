@@ -204,7 +204,30 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
-            Toolbar(vm, offlineCount = snap?.devices?.count { it.isOffline } ?: 0)
+            val offlineCount = snap?.devices?.count { it.isOffline } ?: 0
+            Toolbar(vm, offlineCount = offlineCount)
+            if (vm.showOffline && offlineCount > 0) {
+                var ask by remember { mutableStateOf(false) }
+                TextButton(
+                    onClick = { if (vm.readOnly) vm.readOnlyHit() else ask = true },
+                    modifier = Modifier.align(Alignment.End).padding(end = 4.dp),
+                ) { Text(if (offlineCount == 1) "Remove 1 offline device" else "Remove $offlineCount offline devices") }
+                if (ask) {
+                    AlertDialog(
+                        onDismissRequest = { ask = false },
+                        title = { Text(if (offlineCount == 1) "Remove 1 offline device?" else "Remove $offlineCount offline devices?") },
+                        text = {
+                            Text(
+                                if (offlineCount == 1) FORGET_TEXT
+                                else "They are removed from the list, and the messages the broker keeps for them " +
+                                    "(last will, discovery…) are deleted.\n\nA device that comes back online shows up again by itself.",
+                            )
+                        },
+                        confirmButton = { TextButton(onClick = { ask = false; vm.forgetOffline() }) { Text("Remove all") } },
+                        dismissButton = { TextButton(onClick = { ask = false }) { Text("Cancel") } },
+                    )
+                }
+            }
             val s = snap
             val list = s?.devices.orEmpty()
                 .filter { (vm.showOffline || !it.isOffline || it.upgrading) && it.matches(vm.search) }
@@ -255,6 +278,7 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             onWifi = { wifiTopic = open.topic },
             onBackup = { files.backup(open) },
             onRestore = { files.restore(open) },
+            onForget = { vm.forget(open.topic) },
             readOnly = vm.readOnly,
             onReadOnly = vm::readOnlyHit,
         )

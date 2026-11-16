@@ -55,6 +55,7 @@ import dev.derust.tasmota.ui.theme.Red
 private sealed interface Confirm {
     data class Ap(val to: Int) : Confirm
     data object Upgrade : Confirm
+    data object Forget : Confirm
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -75,6 +76,7 @@ fun DeviceSheet(
     onWifi: () -> Unit,
     onBackup: () -> Unit,
     onRestore: () -> Unit,
+    onForget: () -> Unit,
     /** Read-only mode (app-wide). Commands stay tappable and explain why nothing happens. */
     readOnly: Boolean,
     onReadOnly: () -> Unit,
@@ -129,6 +131,9 @@ fun DeviceSheet(
                 }
                 if (d.hasOptions) {
                     OutlinedButton(onClick = onOptions) { Text("SetOptions") }
+                }
+                if (d.isOffline) {
+                    OutlinedButton(onClick = { ask(Confirm.Forget) }) { Text("Remove from list") }
                 }
                 if (!d.isOffline) {
                     OutlinedButton(onClick = onWifi) { Text("Wi-Fi networks") }
@@ -263,9 +268,21 @@ fun DeviceSheet(
             },
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
         )
+        Confirm.Forget -> AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text("Remove ${d.name}?") },
+            text = { Text(FORGET_TEXT) },
+            confirmButton = { TextButton(onClick = { confirm = null; onForget() }) { Text("Remove") } },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
+        )
         null -> {}
     }
 }
+
+/** What removing an offline device does (sheet and "remove all"). */
+internal const val FORGET_TEXT =
+    "It is removed from the list, and the messages the broker keeps for it (its last will, discovery…) " +
+        "are deleted, so it is not listed again.\n\nIf the device comes back online, it shows up again by itself."
 
 private fun sections(d: Device, s: Snapshot): List<Pair<String, List<Pair<String, String>>>> {
     fun rows(vararg p: Pair<String, Any?>) = p.mapNotNull { (k, v) -> v?.toString()?.takeIf { it.isNotEmpty() }?.let { k to it } }

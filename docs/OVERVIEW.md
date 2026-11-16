@@ -37,8 +37,9 @@ explicitly allow commands. Firmware upgrades always go one device at a time, nev
   signal) and **MQTT** (topics).
 - One-click relay buttons on each row, switching a device between its two Wi-Fi networks,
   single-device firmware upgrades with progress tracking.
-- Per-view column chooser, saved between runs; offline devices shown or hidden; a message
-  log for troubleshooting.
+- Per-view column chooser, saved between runs; offline devices shown or hidden, and removed
+  (with the retained messages the broker keeps for them); a message log for troubleshooting.
+- New Tasmota and Tasmota Derust versions are checked every hour, so a running app shows them.
 - Read-only mode, on at every start, across desktop, web and Android.
 - A local **device simulator**, so every screen can be tried without touching real devices.
 - Reproducible, size-optimized, auditable builds for every platform, security-scanned (Trivy)
