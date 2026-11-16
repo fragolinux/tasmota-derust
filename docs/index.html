@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tasmota Derust</title>
+<meta name="description" content="A modern manager for Tasmota devices: desktop app (Windows, macOS, Linux), web server and Android app. Finds your devices on MQTT, switches relays, edits SetOptions, backs up configurations and upgrades very old firmware safely.">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #5b6470; --border: #dde0e5;
+  --accent: #1f7ae0; --accent-text: #ffffff; --orange: #e07b12; --navy: #12233d;
+  --shadow: 0 1px 2px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1116; --panel: #161b22; --text: #e6e9ed; --muted: #9aa4b0; --border: #2a313a;
+    --accent: #3d8fe8; --accent-text: #ffffff; --orange: #f08c1e; --navy: #0b1626;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+a { color: var(--accent); }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+header.hero { background: var(--navy); color: #fff; padding: 48px 0 40px; }
+.hero .wrap { display: grid; grid-template-columns: auto 1fr; gap: 28px; align-items: center; }
+.hero img.logo { width: 112px; height: 112px; border-radius: 24px; }
+.hero h1 { margin: 0 0 6px; font-size: clamp(30px, 5vw, 44px); line-height: 1.1; }
+.hero p.tag { margin: 0 0 18px; font-size: 18px; color: #c9d4e3; max-width: 640px; }
+.hero .meta { font-size: 14px; color: #9fb0c7; }
+.hero .meta a { color: #cfe2ff; }
+nav.top { display: flex; gap: 18px; flex-wrap: wrap; font-size: 15px; margin-top: 14px; }
+nav.top a { color: #cfe2ff; text-decoration: none; }
+nav.top a:hover { text-decoration: underline; }
+.dl { display: flex; gap: 10px; flex-wrap: wrap; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 10px;
+  background: var(--accent); color: var(--accent-text); text-decoration: none; font-weight: 600;
+  border: 1px solid transparent; font-size: 15px;
+}
+.btn.ghost { background: transparent; color: #fff; border-color: #47607f; }
+.btn small { font-weight: 400; opacity: .8; }
+.btn.mine { background: var(--orange); }
+section { padding: 44px 0 8px; }
+section h2 { font-size: 26px; margin: 0 0 14px; }
+section p.lead { color: var(--muted); margin: 0 0 22px; max-width: 760px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  padding: 16px 18px; box-shadow: var(--shadow);
+}
+.card h3 { margin: 0 0 6px; font-size: 17px; }
+.card p { margin: 0; color: var(--muted); font-size: 15px; }
+.shot { margin: 0; }
+.shot img { width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--border); box-shadow: var(--shadow); display: block; }
+.shot figcaption { color: var(--muted); font-size: 14px; margin-top: 6px; }
+.phones { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+.steps { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-weight: 600; margin: 0 0 16px; }
+.steps span { background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; }
+.steps i { color: var(--muted); font-style: normal; }
+.two { display: grid; grid-template-columns: 1.1fr 1fr; gap: 24px; align-items: start; }
+ul.plain { margin: 0; padding-left: 20px; }
+ul.plain li { margin: 4px 0; }
+footer { margin-top: 48px; padding: 26px 0 40px; border-top: 1px solid var(--border); color: var(--muted); font-size: 14px; }
+footer .wrap { display: flex; gap: 18px; flex-wrap: wrap; justify-content: space-between; }
+#latest { margin-bottom: 12px; color: #c9d4e3; font-size: 15px; }
+@media (max-width: 720px) {
+  .hero .wrap { grid-template-columns: 1fr; gap: 16px; }
+  .hero img.logo { width: 80px; height: 80px; border-radius: 18px; }
+  .two { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <img class="logo" src="icon.svg" alt="">
+    <div>
+      <h1>Tasmota Derust</h1>
+      <p class="tag">A modern manager for your Tasmota devices. It finds them on your MQTT broker by
+        itself and shows them in one list. You can switch relays, control lights, edit SetOptions,
+        back up configurations, and upgrade even very old firmware one safe step at a time.</p>
+      <div id="latest">Latest release: <a href="https://github.com/fragolinux/tasmota-derust/releases/latest">see GitHub</a></div>
+      <div class="dl" id="downloads">
+        <a class="btn" href="https://github.com/fragolinux/tasmota-derust/releases/latest">Download</a>
+      </div>
+      <nav class="top">
+        <a href="#features">Features</a>
+        <a href="#upgrade">Upgrade old Tasmota</a>
+        <a href="#screenshots">Screenshots</a>
+        <a href="https://github.com/fragolinux/tasmota-derust/blob/main/docs/OVERVIEW.md">Overview</a>
+        <a href="https://github.com/fragolinux/tasmota-derust">Source code</a>
+      </nav>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="features">
+    <h2>What it does</h2>
+    <p class="lead">One app for Windows, macOS and Linux, a web server for phones and browsers, and an
+      Android app. They share the same Rust core. Free and open source (MIT or Apache-2.0). It is
+      inspired by TDM but is an independent rewrite, and is not affiliated with the Tasmota project.</p>
+    <div class="grid">
+      <div class="card"><h3>Finds every device</h3><p>Reads Tasmota discovery and last-will messages from your broker. There's nothing to add by hand.</p></div>
+      <div class="card"><h3>Five views</h3><p>Home, Health, Firmware, Wi-Fi and MQTT. Each view has its own columns, sorting and search.</p></div>
+      <div class="card"><h3>Relays and lights</h3><p>One-click relay buttons. Colour wheel, brightness, white temperature and white channel for lights.</p></div>
+      <div class="card"><h3>Safe upgrades</h3><p>Follows the official upgrade path from very old releases, with a free-flash check and restart tracking at every step.</p></div>
+      <div class="card"><h3>SetOptions editor</h3><p>Every SetOption is decoded and explained. Risky options ask for confirmation, and the ones that would cut a device off are blocked.</p></div>
+      <div class="card"><h3>Backup and restore</h3><p>Saves and restores the full device configuration (Tasmota's own .dmp file).</p></div>
+      <div class="card"><h3>Wi-Fi networks</h3><p>Adds a second network or changes the one not in use, then switches a device between its two access points.</p></div>
+      <div class="card"><h3>Read-only by default</h3><p>Every start is read-only, so nothing is sent to your devices until you allow commands.</p></div>
+      <div class="card"><h3>Tidy list</h3><p>Shows or hides offline devices. Removing them also clears the old messages the broker keeps for them.</p></div>
+    </div>
+  </section>
+
+  <section id="upgrade">
+    <h2>Upgrade very old Tasmota, safely</h2>
+    <div class="two">
+      <div>
+        <p class="lead" style="margin-bottom:14px">Devices on 6.x, 7.x or 8.x can't jump straight to the latest release:
+          Tasmota needs its upgrade path, with the right image at each step.</p>
+        <div class="steps"><span>6.7.1</span><i>→</i><span>7.2.0</span><i>→</i><span>8.5.1</span><i>→</i><span>9.1</span><i>→</i><span>16.0.0</span><i>→</i><span>latest</span></div>
+        <ul class="plain">
+          <li>Sets the official image for each step, because old devices often point at dead OtaUrls.</li>
+          <li>Checks free flash against the image size before each step.</li>
+          <li>Follows every restart and checks the version before it offers the next step.</li>
+          <li>Upgrades one device at a time, and only after you confirm.</li>
+        </ul>
+        <p><a href="https://github.com/fragolinux/tasmota-derust/blob/main/docs/upgrade-path/README.md">A recorded run on a real Wemos D1 mini, from 6.7.1 to 16.0.0 →</a></p>
+      </div>
+      <figure class="shot">
+        <img src="upgrade-path/img/s1-1-dialog.png" alt="The upgrade dialog for a device on 6.7.1: step 1 of the path, image and free flash check" loading="lazy">
+        <figcaption>Step 1 of the path, with the image and the free flash check.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="screenshots">
+    <h2>Desktop</h2>
+    <figure class="shot">
+      <img src="screenshots/desktop-home.png" alt="Home view: relays, telemetry, uptime and signal of every device" loading="lazy">
+      <figcaption>Home view: relays, telemetry, uptime and signal of every device.</figcaption>
+    </figure>
+    <div class="grid" style="margin-top:14px">
+      <figure class="shot"><img src="screenshots/desktop-firmware.png" alt="Firmware view" loading="lazy"><figcaption>Firmware</figcaption></figure>
+      <figure class="shot"><img src="screenshots/desktop-health.png" alt="Health view" loading="lazy"><figcaption>Health</figcaption></figure>
+      <figure class="shot"><img src="screenshots/desktop-wifi.png" alt="Wifi view" loading="lazy"><figcaption>Wi-Fi</figcaption></figure>
+      <figure class="shot"><img src="screenshots/desktop-mqtt.png" alt="MQTT view" loading="lazy"><figcaption>MQTT</figcaption></figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>Android and phones</h2>
+    <p class="lead">There's an Android app, and the web server gives any phone browser the same list.</p>
+    <div class="phones">
+      <figure class="shot"><img src="screenshots/android-home.png" alt="Device list" loading="lazy"><figcaption>Devices</figcaption></figure>
+      <figure class="shot"><img src="screenshots/android-device.png" alt="Device detail sheet" loading="lazy"><figcaption>Device sheet</figcaption></figure>
+      <figure class="shot"><img src="screenshots/android-firmware.png" alt="Firmware view" loading="lazy"><figcaption>Firmware</figcaption></figure>
+      <figure class="shot"><img src="screenshots/android-wifi.png" alt="Wifi view" loading="lazy"><figcaption>Wi-Fi</figcaption></figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>Privacy</h2>
+    <p class="lead" style="margin-bottom:0">It connects only to the MQTT broker you configure and to your devices. It asks
+      GitHub and ota.tasmota.com only for version numbers, release notes and firmware sizes.
+      Nothing about you or your devices is sent anywhere.</p>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Tasmota Derust · MIT or Apache-2.0</span>
+    <span>
+      <a href="https://github.com/fragolinux/tasmota-derust/releases">All releases</a> ·
+      <a href="https://github.com/fragolinux/tasmota-derust/blob/main/docs/tasmota-setoption-report.md">SetOption report</a> ·
+      <a href="https://github.com/fragolinux/tasmota-derust">GitHub</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+// Download buttons for the latest release, the visitor's system first.
+(async () => {
+  const kinds = [
+    ["android", /\.apk$/, "Android"],
+    ["windows", /^tasmota-derust-[\d.]+-windows-x64\.zip$/, "Windows"],
+    ["macos", /^tasmota-derust-[\d.]+-macos-arm64\.dmg$/, "macOS"],
+    ["linux", /^tasmota-derust-[\d.]+-linux-x64\.tar\.gz$/, "Linux"],
+  ];
+  const ua = navigator.userAgent;
+  const mine = /Android/i.test(ua) ? "android" : /Windows/i.test(ua) ? "windows"
+    : /Mac OS X|Macintosh/i.test(ua) && !/iPhone|iPad/i.test(ua) ? "macos" : /Linux/i.test(ua) ? "linux" : null;
+  try {
+    const r = await fetch("https://api.github.com/repos/fragolinux/tasmota-derust/releases/latest");
+    if (!r.ok) return;
+    const rel = await r.json();
+    const v = (rel.tag_name || "").replace(/^v/, "");
+    const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    document.getElementById("latest").innerHTML =
+      `Latest release: <a href="${esc(rel.html_url)}" style="color:#cfe2ff">${esc(v)}</a>`;
+    const btns = [];
+    for (const [k, re, label] of kinds) {
+      const a = (rel.assets || []).find(x => re.test(x.name));
+      if (!a) continue;
+      btns.push({ k, html: `<a class="btn ${k === mine ? "mine" : ""}" href="${esc(a.browser_download_url)}">${label} <small>${esc(v)}</small></a>` });
+    }
+    btns.sort((a, b) => (b.k === mine) - (a.k === mine));
+    btns.push({ html: `<a class="btn ghost" href="${esc(rel.html_url)}">Web server and all files</a>` });
+    if (btns.length > 1) document.getElementById("downloads").innerHTML = btns.map(b => b.html).join("");
+  } catch (e) { /* keep the plain link */ }
+})();
+</script>
+</body>
+</html>

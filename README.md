@@ -8,6 +8,7 @@ Inspired by [TDM – Tasmota Device Manager](https://github.com/jziolkowski/tdm)
 which is no longer maintained. Tasmota Derust is an independent rewrite (no code taken from TDM)
 and is not affiliated with the Tasmota project.
 
+- **[Website](https://fragolinux.github.io/tasmota-derust/)**: what it is, screenshots, downloads for every system
 - [Download](#download)
 - **[Upgrade very old Tasmota, safely](#upgrade-very-old-tasmota-safely)**: a [recorded run on a real device](docs/upgrade-path/README.md)
 - [Overview](docs/OVERVIEW.md): where the project started, how it grew, what each version does

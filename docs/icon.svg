@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Tasmota Derust app icon. The artwork uses the 108-unit grid of Android adaptive icons
+       (android/app/src/main/res/drawable/ic_launcher_*.xml use the same paths). -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1D4466"/>
+      <stop offset="1" stop-color="#0E2133"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <g transform="translate(100 100) scale(11.4444) translate(-18 -18)">
+    <path d="M54,32 L76,51 V76 H32 V51 Z" fill="#F08C1E" stroke="#F08C1E" stroke-width="4" stroke-linejoin="round"/>
+    <g fill="none" stroke="#0E2133" stroke-width="4.5" stroke-linecap="round">
+      <path d="M48.21,54.11 A9,9 0 1,0 59.79,54.11"/>
+      <path d="M54,49 V60"/>
+    </g>
+  </g>
+</svg>
