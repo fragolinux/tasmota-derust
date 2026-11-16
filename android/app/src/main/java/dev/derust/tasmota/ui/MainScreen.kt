@@ -108,7 +108,7 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
     }
     var showAbout by remember { mutableStateOf(false) }
     if (showAbout) {
-        AboutDialog(appVersion, snap?.appLatest, onClose = { showAbout = false })
+        AboutDialog(appVersion, snap?.appLatest, snap?.appUpdate, onClose = { showAbout = false })
     }
 
     val files = rememberDeviceFiles(vm)

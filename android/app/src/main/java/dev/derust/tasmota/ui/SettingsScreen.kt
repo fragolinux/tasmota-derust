@@ -166,12 +166,15 @@ fun SettingsScreen(
  * then its release page, what the app is, and the project website.
  */
 @Composable
-fun AboutDialog(version: String?, latest: String?, onClose: () -> Unit) {
+fun AboutDialog(version: String?, latest: String?, update: String?, onClose: () -> Unit) {
     val uri = LocalUriHandler.current
-    val target = latest ?: version
+    // `update` is set only when the latest release is newer than this app. Newer than the
+    // latest release (being released, or a development build): its notes are not out yet.
+    val ahead = update == null && latest != null && version != null && latest != version
+    val target = if (ahead) null else update ?: version
     var notes by remember(target) { mutableStateOf<Changelog?>(null) }
     LaunchedEffect(target) { if (target != null) notes = withContext(Dispatchers.IO) { changelog(target) } }
-    val newer = latest != null && version != null && latest != version
+    val newer = update != null
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Tasmota Derust ${version ?: ""}") },
@@ -179,7 +182,8 @@ fun AboutDialog(version: String?, latest: String?, onClose: () -> Unit) {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     when {
-                        newer -> "Version $latest is available"
+                        newer -> "Version $update is available"
+                        ahead -> "This version is newer than the latest release ($latest)"
                         latest != null -> "You have the latest version"
                         else -> "This version"
                     },

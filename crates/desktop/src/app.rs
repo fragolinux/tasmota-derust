@@ -1152,12 +1152,22 @@ impl DerustApp {
             return;
         }
         let mine = env!("CARGO_PKG_VERSION");
-        let latest = match &*self.app_latest.lock().unwrap() {
-            Latest::Ok(v) => Some(v.clone()),
-            _ => None,
+        // One guard at a time on app_latest.
+        let (latest, update) = {
+            let g = self.app_latest.lock().unwrap();
+            let latest = match &*g {
+                Latest::Ok(v) => Some(v.clone()),
+                _ => None,
+            };
+            (latest, github::app_update(&g))
         };
-        let target = latest.clone().unwrap_or_else(|| mine.to_string());
-        if self.about_notes.as_ref().is_none_or(|(v, _)| *v != target) {
+        // Newer than the latest release (a build being released, or a development build):
+        // its notes are not published yet, so none are loaded.
+        let ahead = update.is_none() && latest.as_deref().is_some_and(|l| l != mine);
+        let target = update.clone().unwrap_or_else(|| mine.to_string());
+        if ahead {
+            self.about_notes = None;
+        } else if self.about_notes.as_ref().is_none_or(|(v, _)| *v != target) {
             let slot = Arc::new(Mutex::new(None));
             let (out, v, c) = (slot.clone(), target.clone(), ctx.clone());
             std::thread::spawn(move || {
@@ -1166,12 +1176,8 @@ impl DerustApp {
             });
             self.about_notes = Some((target.clone(), slot));
         }
-        let slot = self
-            .about_notes
-            .as_ref()
-            .map(|(_, s)| s.clone())
-            .expect("set above");
-        let newer = latest.as_deref().is_some_and(|l| l != mine);
+        let slot = self.about_notes.as_ref().map(|(_, s)| s.clone());
+        let newer = update.is_some();
         let mut open = true;
         egui::Window::new(concat!("Tasmota Derust ", env!("CARGO_PKG_VERSION")))
             .open(&mut open)
@@ -1185,22 +1191,33 @@ impl DerustApp {
                             .strong()
                             .color(ORANGE),
                     );
+                } else if ahead {
+                    ui.label(
+                        RichText::new(format!(
+                            "This version is newer than the latest release ({})",
+                            latest.as_deref().unwrap_or("?")
+                        ))
+                        .strong(),
+                    );
+                    ui.hyperlink_to("Latest release", github::APP_RELEASES);
                 } else if latest.is_some() {
                     ui.label(RichText::new("You have the latest version").strong());
                 } else {
                     ui.label(RichText::new("This version").strong());
                 }
-                match &*slot.lock().unwrap() {
-                    None => {
+                let notes = slot.as_ref().map(|s| s.lock().unwrap());
+                match notes.as_deref() {
+                    None => {}
+                    Some(None) => {
                         ui.horizontal(|ui| {
                             ui.spinner();
                             ui.label("Loading what changed…");
                         });
                     }
-                    Some(Err(e)) => {
+                    Some(Some(Err(e))) => {
                         ui.colored_label(RED, e.as_str());
                     }
-                    Some(Ok(c)) => {
+                    Some(Some(Ok(c))) => {
                         match c.download_for(github::this_platform()) {
                             Some(d) => {
                                 ui.hyperlink_to(

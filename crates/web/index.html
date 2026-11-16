@@ -1033,25 +1033,37 @@ async function showSettings() {
 // About: first the latest release (download + what changed, read here), then its release
 // page, what the app is and the project website.
 async function showAbout() {
-  const latest = data.app_latest, mine = data.app_version, target = latest || mine;
-  const newer = latest && latest !== mine;
-  const head = newer ? `<p class="about-head warn-text">Version ${esc(latest)} is available</p>`
+  // Notes arriving after the dialog was closed and opened again belong to the old one.
+  const opened = showAbout.opened = (showAbout.opened || 0) + 1;
+  // app_update is set only when the latest release is newer than this program.
+  const latest = data.app_latest, mine = data.app_version, update = data.app_update;
+  // Newer than the latest release (being released, or a development build): no notes yet.
+  const ahead = !update && latest && latest !== mine;
+  const target = update || mine;
+  const head = update ? `<p class="about-head warn-text">Version ${esc(update)} is available</p>`
+    : ahead ? `<p class="about-head">This version is newer than the latest release (${esc(latest)})</p>`
     : latest ? `<p class="about-head">You have the latest version</p>` : `<p class="about-head">This version</p>`;
   const body = `<div class="about">${head}<div id="aboutNotes"><p style="color:var(--muted)">Loading what changed…</p></div>
     <hr>${$("aboutTpl").innerHTML}
     <p><a href="@SITE@" target="_blank" rel="noopener">Website: screenshots, guides, all downloads</a></p></div>`;
   const closed = confirmDialog(`Tasmota Derust ${mine}`, body, "Close", true);
+  if (ahead) {
+    const box = $("aboutNotes");
+    if (box) box.innerHTML = `<p><a href="${esc(data.app_releases)}" target="_blank" rel="noopener">Latest release</a></p>`;
+    await closed;
+    return;
+  }
   try {
     const r = await fetch(`/api/changelog/${encodeURIComponent(target)}`);
     if (!r.ok) throw new Error(await r.text());
     const c = await r.json();
-    const box = $("aboutNotes");
+    const box = opened === showAbout.opened && $("aboutNotes");
     if (box) box.innerHTML = downloadHtml(c) + `<div class="changes">` + (c.sections.length ? c.sections.map(s =>
       `<h4>${esc(s.title)}</h4><ul>${s.items.map(i => `<li>${esc(i)}</li>`).join("")}</ul>`).join("")
       : "<p>No list of changes in these release notes.</p>") + `</div>` +
       `<p><a href="${esc(c.url)}" target="_blank" rel="noopener">Release page</a></p>`;
   } catch (err) {
-    const box = $("aboutNotes");
+    const box = opened === showAbout.opened && $("aboutNotes");
     if (box) box.innerHTML = `<p class="warn-text">${esc(err.message || String(err))}</p>
       <p><a href="https://github.com/fragolinux/tasmota-derust/releases" target="_blank" rel="noopener">All releases</a></p>`;
   }
