@@ -10,6 +10,8 @@ and is not affiliated with the Tasmota project.
 
 - [Download](#download)
 - **[Upgrade very old Tasmota, safely](#upgrade-very-old-tasmota-safely)**: a [recorded run on a real device](docs/upgrade-path/README.md)
+- [Overview](docs/OVERVIEW.md): where the project started, how it grew, what each version does
+- [Tasmota SetOption defaults: firmware vs documentation](docs/tasmota-setoption-report.md): wrong defaults and dropped upgrade steps found along the way, for the Tasmota developers
 - [Features](#features) · [Screenshots](#screenshots)
 - [Desktop app](#desktop-app) · [Web version](#web-version) · [Android app](#android-app)
 - **Building, development, releases**: see [DEVELOPMENT.md](DEVELOPMENT.md)
@@ -111,7 +113,8 @@ GitHub the first time you open a SetOptions window. Nothing about you or your de
   the device off from the app. The descriptions are downloaded from the Tasmota documentation
   and cached; without internet the options are shown by number. The defaults are those of a
   freshly flashed current Tasmota (the documentation's, corrected from the firmware source
-  where it is wrong): a device upgraded from old versions can keep older values.
+  where it is wrong, see [the report](docs/tasmota-setoption-report.md)): a device upgraded
+  from old versions can keep older values.
 - **Wi-Fi networks**: shows each device's SSId1 and SSId2 and which one is in use, and sets
   the one it is NOT using (name + password, one restart): add a second network to a device
   that has only one, or change the spare one. The network in use can't be changed from here,
@@ -122,9 +125,12 @@ GitHub the first time you open a SetOptions window. Nothing about you or your de
   Backup / Restore pages. "Back up first" sits in the SetOptions window too. The device's web
   password is asked only when it has one, and never stored.
 - Message log panel for troubleshooting.
-- The version (bottom right on the desktop, next to the title on Android) opens the list of
-  changes of that release, and of a newer one when it is out, with the download for the
-  system in use next to the link to the release page.
+- **About**: the version (*About · vX* bottom right on the desktop, the ⓘ link on the web page,
+  the ⓘ pill next to the title on Android) says what the app is and opens the list of changes
+  of that release, and of a newer one when it is out, with the download for the system in use
+  next to the link to the release page.
+- **Light, dark or system theme**: in the About window on the desktop and on the web page, in
+  Settings on Android.
 - **Read-only mode**, on at every start: only read queries (`Status 0`, `Module`, `SSId1/2`)
   are sent, and relays, Wi-Fi switching and settings, SetOptions, restores and upgrades are
   refused (a backup is allowed: it changes nothing). Trying one says that
