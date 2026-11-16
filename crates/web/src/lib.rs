@@ -23,6 +23,31 @@ use tasmota_derust_core::session::{CommandError, Session, Snapshot};
 
 const INDEX_HTML: &str = include_str!("../index.html");
 
+/// The page with the About text and the app icon (favicon) filled in.
+static INDEX: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let about = tasmota_derust_core::ABOUT
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace("\n\n", "</p><p>");
+    // The SVG without its comment, on one line.
+    let svg = include_str!("../../../packaging/icon/icon.svg");
+    let svg = match (svg.find("<!--"), svg.find("-->")) {
+        (Some(a), Some(b)) => format!("{}{}", &svg[..a], &svg[b + 3..]),
+        _ => svg.to_string(),
+    };
+    let icon: String = svg.split_whitespace().collect::<Vec<_>>().join(" ");
+    let favicon = icon
+        .replace('%', "%25")
+        .replace('#', "%23")
+        .replace('"', "'")
+        .replace('<', "%3C")
+        .replace('>', "%3E");
+    INDEX_HTML
+        .replace("@ABOUT@", &about)
+        .replace("@FAVICON@", &favicon)
+});
+
 #[derive(Clone)]
 struct AppState {
     session: Arc<Session>,
@@ -45,7 +70,7 @@ pub const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
 /// visitors where read-only mode can be turned off (shown when a command is refused).
 pub fn router(session: Arc<Session>, read_only_hint: &str) -> Router {
     Router::new()
-        .route("/", get(|| async { Html(INDEX_HTML) }))
+        .route("/", get(|| async { Html(INDEX.as_str()) }))
         .route("/api/state", get(api_state))
         .route("/api/changelog/{version}", get(api_changelog))
         .route("/api/refresh", post(api_refresh))

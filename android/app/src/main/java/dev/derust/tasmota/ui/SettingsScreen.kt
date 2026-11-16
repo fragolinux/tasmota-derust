@@ -42,6 +42,13 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.derust.tasmota.BrokerSettings
+import dev.derust.tasmota.ThemeMode
+import dev.derust.tasmota.core.aboutText
+import dev.derust.tasmota.core.repoUrl
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,6 +59,8 @@ fun SettingsScreen(
     onClose: () -> Unit,
     appUpdate: String? = null,
     appReleases: String = "",
+    theme: ThemeMode = ThemeMode.System,
+    onTheme: (ThemeMode) -> Unit = {},
 ) {
     var host by rememberSaveable { mutableStateOf(current.host) }
     var port by rememberSaveable { mutableStateOf(current.port.toString()) }
@@ -116,20 +125,62 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            Text("Appearance", style = MaterialTheme.typography.titleMedium)
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                ThemeMode.entries.forEachIndexed { i, t ->
+                    SegmentedButton(
+                        selected = theme == t,
+                        onClick = { onTheme(t) },
+                        shape = SegmentedButtonDefaults.itemShape(i, ThemeMode.entries.size),
+                    ) { Text(t.title) }
+                }
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
             val context = LocalContext.current
             val version = remember {
                 runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull()
             }
+            Text("About Tasmota Derust ${version ?: ""}", style = MaterialTheme.typography.titleMedium)
+            Text(aboutText(), style = MaterialTheme.typography.bodyMedium)
             var showNotes by remember { mutableStateOf<String?>(null) }
+            val uri = LocalUriHandler.current
             TextButton(onClick = { showNotes = version }, enabled = version != null) {
-                Text("Tasmota Derust ${version ?: ""}: what changed", style = MaterialTheme.typography.bodySmall)
+                Text("What changed in this version")
             }
             if (appUpdate != null) {
                 TextButton(onClick = { showNotes = appUpdate }) { Text("Version $appUpdate is available: what changed") }
             }
+            TextButton(onClick = { uri.openUri(repoUrl()) }) { Text("Source code and downloads") }
             showNotes?.let { v -> ChangelogDialog(v, onClose = { showNotes = null }) }
         }
     }
+}
+
+/** What the app is, with the way to its release notes and source code. */
+@Composable
+fun AboutDialog(version: String?, onNotes: () -> Unit, onClose: () -> Unit) {
+    val uri = LocalUriHandler.current
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Tasmota Derust ${version ?: ""}") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(aboutText())
+                Spacer(Modifier.padding(top = 8.dp))
+                TextButton(onClick = onNotes, enabled = version != null) { Text("What changed in this version") }
+                TextButton(onClick = { uri.openUri(repoUrl()) }) { Text("Source code and downloads") }
+                Text(
+                    "Theme (light / dark) and the MQTT broker are in Settings.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
+    )
 }
 
 /** Release notes of a Tasmota Derust version, loaded from GitHub, with its APK to download. */

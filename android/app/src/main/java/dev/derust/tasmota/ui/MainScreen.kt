@@ -50,6 +50,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -83,6 +84,8 @@ fun App(vm: MainViewModel) {
             onClose = { showSettings = false },
             appUpdate = snap?.appUpdate,
             appReleases = snap?.appReleases ?: "",
+            theme = vm.theme,
+            onTheme = vm::selectTheme,
         )
     } else {
         MainScreen(vm, onSettings = { showSettings = true })
@@ -105,6 +108,10 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
     // Release notes shown for this version (the running one, or the available update).
     var showNotes by remember { mutableStateOf<String?>(null) }
     showNotes?.let { v -> ChangelogDialog(v, onClose = { showNotes = null }) }
+    var showAbout by remember { mutableStateOf(false) }
+    if (showAbout) {
+        AboutDialog(appVersion, onNotes = { showAbout = false; showNotes = appVersion }, onClose = { showAbout = false })
+    }
 
     val files = rememberDeviceFiles(vm)
     var wifiTopic by rememberSaveable { mutableStateOf<String?>(null) }
@@ -120,13 +127,26 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             TopAppBar(
                 title = {
                     Column {
-                        Row(verticalAlignment = Alignment.Bottom) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Tasmota Derust", fontWeight = FontWeight.SemiBold, fontSize = 20.sp, maxLines = 1)
-                            appVersion?.let { v ->
+                            Spacer(Modifier.width(6.dp))
+                            // A tappable pill, so it reads as a button: opens About (what the
+                            // app is, what changed, theme).
+                            Row(
+                                Modifier.clip(RoundedCornerShape(50))
+                                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                                    .clickable { showAbout = true }
+                                    .padding(start = 5.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    Icons.Info, "About Tasmota Derust", Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                )
+                                Spacer(Modifier.width(3.dp))
                                 Text(
-                                    " $v", fontSize = 13.sp, maxLines = 1,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.clickable { showNotes = v },
+                                    appVersion?.let { "v$it" } ?: "About", fontSize = 12.sp, maxLines = 1,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
                                 )
                             }
                             snap?.appUpdate?.let { v ->

@@ -94,6 +94,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Screen state, remembered between launches.
     var view by mutableStateOf(prefs.view)
         private set
+    var theme by mutableStateOf(prefs.theme)
+        private set
+
+    fun selectTheme(t: ThemeMode) {
+        theme = t
+        prefs.theme = t
+    }
+
     var showOffline by mutableStateOf(prefs.showOffline)
         private set
     var sort by mutableStateOf(prefs.sort)

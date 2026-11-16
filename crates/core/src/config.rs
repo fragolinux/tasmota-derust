@@ -40,6 +40,8 @@ pub struct Config {
     pub show_offline: bool,
     pub view: View,
     pub columns: BTreeMap<View, Vec<ColumnSetting>>,
+    /// Desktop app colours: "system", "light" or "dark".
+    pub theme: String,
 }
 
 impl Default for Config {
@@ -49,6 +51,7 @@ impl Default for Config {
             show_offline: true,
             view: View::Home,
             columns: BTreeMap::new(),
+            theme: "system".into(),
         };
         c.normalize();
         c

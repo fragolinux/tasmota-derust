@@ -208,6 +208,11 @@ Then point the app at `127.0.0.1`, port `1884`. From the Android emulator the co
   macOS/Linux, with a config pointing at `127.0.0.1:1884`), so it never touches a real broker.
   The feature is development-only and never part of `make` builds.
 
+- App icon: the source is `packaging/icon/icon.svg`. `scripts/icons.sh` (macOS, needs Google
+  Chrome) renders it and writes the desktop window icon, `packaging/macos/AppIcon.icns` and
+  `packaging/windows/icon.ico`; the results are committed. The Android icon is made of vector
+  drawables with the same paths (`res/drawable/ic_launcher_*.xml`): change them by hand.
+
 - `cargo test --workspace` runs the tests (the web one starts the server on a free port).
 - `cargo run -p tasmota-derust-core --example probe [seconds]` listens to the configured broker
   and prints what was understood. It is passive and never publishes.

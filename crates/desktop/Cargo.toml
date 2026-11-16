@@ -19,8 +19,8 @@ egui_extras = "0.37.0"
 env_logger = "0.11.11"
 open = "5.4.5"
 serde_json.workspace = true
-png = { version = "0.18.1", optional = true }
+png = "0.18.1"
 
 [features]
 # Development only: DERUST_SCREENSHOTS=<dir> saves a PNG of each screen (README images).
-screenshots = ["dep:png"]
+screenshots = []

@@ -89,7 +89,8 @@ web: mac-web win-web linux-web
 mac-desktop:
 	$(CARGO_BUILD) -p tasmota-derust
 	@rm -rf "$(MAC_APP)"
-	@mkdir -p "$(MAC_APP)/Contents/MacOS"
+	@mkdir -p "$(MAC_APP)/Contents/MacOS" "$(MAC_APP)/Contents/Resources"
+	cp packaging/macos/AppIcon.icns "$(MAC_APP)/Contents/Resources/"
 	cp target/dist/tasmota-derust "$(MAC_APP)/Contents/MacOS/tasmota-derust"
 	@sed 's/@VERSION@/$(VERSION)/g' packaging/macos/Info.plist > "$(MAC_APP)/Contents/Info.plist"
 	codesign --force --sign - "$(MAC_APP)"

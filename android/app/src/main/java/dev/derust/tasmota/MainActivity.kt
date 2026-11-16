@@ -8,6 +8,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import android.graphics.Color
+import androidx.activity.SystemBarStyle
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.LaunchedEffect
 import dev.derust.tasmota.ui.App
 import dev.derust.tasmota.ui.theme.TasmotaDerustTheme
@@ -19,7 +22,17 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            TasmotaDerustTheme {
+            val dark = when (vm.theme) {
+                ThemeMode.System -> isSystemInDarkTheme()
+                ThemeMode.Light -> false
+                ThemeMode.Dark -> true
+            }
+            // Status and navigation bar icons follow the app's theme, not only the phone's.
+            LaunchedEffect(dark) {
+                val bars = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark }
+                enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
+            }
+            TasmotaDerustTheme(darkTheme = dark) {
                 // Android 17+ asks the user before an app can reach devices on the local network.
                 if (Build.VERSION.SDK_INT >= 37) {
                     val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}

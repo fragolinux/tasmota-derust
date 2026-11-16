@@ -22,6 +22,8 @@ const STEPS: &[&str] = &[
     "backup",
     "upgrade",
     "changelog",
+    "about",
+    "about-light",
 ];
 
 pub(super) struct Shots {
@@ -67,6 +69,8 @@ impl DerustApp {
             self.wifi_open = None;
             self.backup_open = None;
             self.changelog = None;
+            self.about_open = false;
+            ctx.set_theme(theme_pref(&self.cfg.theme));
             if s.step == STEPS.len() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 return;
@@ -81,6 +85,15 @@ impl DerustApp {
                 "firmware" => self.cfg.view = View::Firmware,
                 "wifi" => self.cfg.view = View::Wifi,
                 "mqtt" => self.cfg.view = View::Mqtt,
+                "about" => {
+                    self.cfg.view = View::Home;
+                    self.about_open = true;
+                }
+                "about-light" => {
+                    self.cfg.view = View::Home;
+                    self.about_open = true;
+                    ctx.set_theme(egui::ThemePreference::Light);
+                }
                 "log" => {
                     self.cfg.view = View::Home;
                     self.log_open = true;

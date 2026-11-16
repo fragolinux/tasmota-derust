@@ -11,6 +11,9 @@ data class BrokerSettings(
     val password: String = "",
 )
 
+/** App colours: follow the phone, or always light / dark. */
+enum class ThemeMode(val title: String) { System("System"), Light("Light"), Dark("Dark") }
+
 class Prefs(context: Context) {
     private val p = context.getSharedPreferences("derust", Context.MODE_PRIVATE)
 
@@ -36,6 +39,10 @@ class Prefs(context: Context) {
     var showOffline: Boolean
         get() = p.getBoolean("showOffline", false)
         set(v) = p.edit { putBoolean("showOffline", v) }
+
+    var theme: ThemeMode
+        get() = ThemeMode.entries.firstOrNull { it.name == p.getString("theme", null) } ?: ThemeMode.System
+        set(v) = p.edit { putString("theme", v.name) }
 
     var sort: SortKey
         get() = SortKey.entries.firstOrNull { it.name == p.getString("sort", null) } ?: SortKey.Name

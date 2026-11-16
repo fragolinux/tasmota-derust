@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>Tasmota Derust</title>
+<link rel="icon" href="data:image/svg+xml,@FAVICON@">
+<script>try { const t = JSON.parse(localStorage.getItem("derust.theme")); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}</script>
 <style>
 :root {
   --bg: #f4f5f7; --panel: #ffffff; --panel-2: #f0f1f4; --text: #1d1f23; --muted: #6b7079;
@@ -18,6 +20,12 @@
     --border: #33383e; --accent: #3d8fe8; --link: #6aaef5;
   }
 }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #15171a; --panel: #1e2125; --panel-2: #262a2f; --text: #e6e8eb; --muted: #9aa0a8;
+  --border: #33383e; --accent: #3d8fe8; --link: #6aaef5;
+}
+:root[data-theme="light"] { color-scheme: light; }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
@@ -108,7 +116,12 @@ button.ap { cursor: pointer; }
 .lslider { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; margin: 6px 0; }
 .lslider input { width: 100%; }
 .lslider span { color: var(--muted); font-size: 13px; min-width: 3ch; text-align: right; }
-.app-ver { color: inherit; text-decoration: none; } .app-ver:hover { text-decoration: underline; }
+.app-ver { color: var(--link); text-decoration: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; }
+.app-ver:hover { text-decoration: underline; }
+.app-ver svg { width: 14px; height: 14px; }
+.about p { margin: 0 0 10px; }
+.about .theme-row { display: flex; gap: 6px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+.about .theme-row .btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .changes h4 { margin: 10px 0 4px; } .changes ul { margin: 0; padding-left: 20px; }
 .up-done { color: var(--green); } .up-failed { color: var(--red); } .up-note { color: var(--muted); }
 .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--muted); border-top-color: transparent;
@@ -292,6 +305,7 @@ dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding
 <nav class="bnav m-only" id="bnav"></nav>
 <dialog id="sheet" class="sheet"><div class="sheet-inner" id="sheetBody"></div></dialog>
 
+<template id="aboutTpl"><p>@ABOUT@</p></template>
 <dialog id="dlg">
   <h3 id="dlgTitle"></h3>
   <div id="dlgBody"></div>
@@ -599,7 +613,7 @@ function render() {
   const offline = data.devices.filter(d => d.online === false).length;
   const upd = data.app_update
     ? ` <a class="app-update" href="#" data-changelog="${esc(data.app_update)}" title="A newer Tasmota Derust is published: see what changed">v${esc(data.app_update)} available</a>` : "";
-  const me = `<a class="app-ver" href="#" data-changelog="${esc(data.app_version)}" title="What changed in this version">v${esc(data.app_version)}</a>`;
+  const me = `<a class="app-ver" href="#" data-about="1" title="About Tasmota Derust, what changed in this version, theme">${svg(INFO_ICON)}v${esc(data.app_version)}</a>`;
   $("counts").innerHTML = `${data.devices.length} devices · ${online} online · ${offline} offline · ${me}${upd}`;
   $("mver").innerHTML = `${me}${upd}`;
   $("banner").innerHTML = data.read_only
@@ -664,6 +678,7 @@ const ICONS = {
   wifi: `<path d="M2 9a15 15 0 0 1 20 0"/><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor"/>`,
   mqtt: `<path d="M4 7h13l-3-3M20 17H7l3 3"/>`,
 };
+const INFO_ICON = `<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r="0.6" fill="currentColor"/>`;
 const svg = p => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
 const rssiChip = d => d.rssi == null || d.online === false ? "" : `<span class="rssi" style="background:${rssiColor(d.rssi)}">${d.rssi}</span>`;
 
@@ -770,9 +785,11 @@ function openSheet(topic) {
 }
 
 // ---------------------------------------------------------------- dialogs
-function confirmDialog(title, bodyHtml, okLabel) {
+function confirmDialog(title, bodyHtml, okLabel, noCancel = false) {
   return new Promise(resolve => {
     const dlg = $("dlg");
+    dlg.onclick = null;
+    $("dlgCancel").hidden = noCancel;
     $("dlgTitle").textContent = title;
     $("dlgBody").innerHTML = bodyHtml;
     $("dlgOk").textContent = okLabel;
@@ -931,6 +948,31 @@ function downloadHtml(c) {
     : `<p style="color:var(--muted)">No download for this system in this release.</p>`;
 }
 
+// Light / dark / system, remembered by this browser.
+const THEMES = { system: "System", light: "Light", dark: "Dark" };
+function applyTheme(t) {
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+}
+applyTheme(store.get("theme", "system"));
+
+async function showAbout() {
+  const theme = () => `<div class="theme-row">Theme ${Object.entries(THEMES).map(([k, t]) =>
+    `<button class="btn${store.get("theme", "system") === k ? " on" : ""}" data-theme-set="${k}">${t}</button>`).join("")}</div>`;
+  const body = `<div class="about">${$("aboutTpl").innerHTML}${theme()}
+    <p><a href="#" data-changelog="${esc(data.app_version)}">What changed in version ${esc(data.app_version)}</a>
+    · <a href="https://github.com/fragolinux/tasmota-derust" target="_blank" rel="noopener">Source code and downloads</a></p></div>`;
+  const dlg = $("dlg");
+  const closed = confirmDialog(`Tasmota Derust ${data.app_version}`, body, "Close", true);
+  dlg.onclick = e => {
+    const b = e.target.closest("[data-theme-set]");
+    if (!b) return;
+    store.set("theme", b.dataset.themeSet); applyTheme(b.dataset.themeSet);
+    dlg.querySelectorAll("[data-theme-set]").forEach(x => x.classList.toggle("on", x === b));
+  };
+  await closed;
+}
+
 async function showChangelog(version) {
   let body;
   try {
@@ -946,11 +988,12 @@ async function showChangelog(version) {
     body = `<p class="warn-text">${esc(err.message || String(err))}</p>
       <p><a href="https://github.com/fragolinux/tasmota-derust/releases" target="_blank" rel="noopener">All releases</a></p>`;
   }
-  await confirmDialog(`Tasmota Derust ${version}`, body, "Close");
+  await confirmDialog(`Tasmota Derust ${version}`, body, "Close", true);
 }
 
 // ---------------------------------------------------------------- events
 document.addEventListener("click", e => {
+  if (e.target.closest("[data-about]")) { e.preventDefault(); showAbout(); return; }
   const cl = e.target.closest("[data-changelog]");
   if (cl) { e.preventDefault(); showChangelog(cl.dataset.changelog); return; }
   const tab = e.target.closest("[data-view]");

@@ -15,7 +15,8 @@ fn main() -> eframe::Result {
                     [1400.0, 820.0]
                 },
             )
-            .with_min_inner_size([800.0, 400.0]),
+            .with_min_inner_size([800.0, 400.0])
+            .with_icon(icon()),
         ..Default::default()
     };
     eframe::run_native(
@@ -23,4 +24,20 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| Ok(Box::new(app::DerustApp::new(cc)))),
     )
+}
+
+/// Window and taskbar icon (macOS takes the bundle's .icns, Windows the executable's .ico).
+fn icon() -> egui::IconData {
+    let png = include_bytes!("../assets/icon-256.png");
+    let mut reader = png::Decoder::new(std::io::Cursor::new(&png[..]))
+        .read_info()
+        .expect("embedded icon");
+    let mut rgba = vec![0; reader.output_buffer_size().expect("icon size")];
+    let info = reader.next_frame(&mut rgba).expect("embedded icon");
+    rgba.truncate(info.buffer_size());
+    egui::IconData {
+        rgba,
+        width: info.width,
+        height: info.height,
+    }
 }

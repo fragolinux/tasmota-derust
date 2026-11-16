@@ -551,6 +551,17 @@ pub struct ChangelogSection {
     pub items: Vec<String>,
 }
 
+/// What the app is (About box), shared with the desktop app and the web page.
+#[uniffi::export]
+pub fn about_text() -> String {
+    tasmota_derust_core::ABOUT.to_string()
+}
+
+#[uniffi::export]
+pub fn repo_url() -> String {
+    tasmota_derust_core::REPO_URL.to_string()
+}
+
 #[uniffi::export]
 pub fn changelog(version: String) -> Changelog {
     match tasmota_derust_core::github::changelog(&version) {

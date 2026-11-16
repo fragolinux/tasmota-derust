@@ -146,6 +146,7 @@ pub struct DerustApp {
     light_open: Option<(String, LightEdit)>,
     /// Changelog popup: version and its notes (None while loading).
     changelog: Option<(String, ChangelogSlot)>,
+    about_open: bool,
     options_open: Option<OptionsWindow>,
     wifi_open: Option<WifiWindow>,
     backup_open: Option<BackupWindow>,
@@ -183,6 +184,7 @@ impl DerustApp {
             read_only: true,
             notice: None,
             changelog: None,
+            about_open: false,
             light_open: None,
             options_open: None,
             wifi_open: None,
@@ -191,6 +193,7 @@ impl DerustApp {
             #[cfg(feature = "screenshots")]
             shots: shots::Shots::from_env(),
         };
+        ctx.set_theme(theme_pref(&app.cfg.theme));
         if app.cfg.broker.host.trim().is_empty() {
             app.settings_open = true;
         } else {
@@ -1010,6 +1013,51 @@ impl DerustApp {
         self.changelog = Some((version.to_string(), slot));
     }
 
+    fn about_window(&mut self, ctx: &egui::Context) {
+        if !self.about_open {
+            return;
+        }
+        let mut open = true;
+        let mut notes = false;
+        egui::Window::new(concat!("Tasmota Derust ", env!("CARGO_PKG_VERSION")))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(460.0)
+            .show(ctx, |ui| {
+                for p in tasmota_derust_core::ABOUT.split("\n\n") {
+                    ui.label(p);
+                    ui.add_space(4.0);
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Theme");
+                    let before = self.cfg.theme.clone();
+                    for (k, t) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
+                        ui.selectable_value(&mut self.cfg.theme, k.to_string(), t);
+                    }
+                    if self.cfg.theme != before {
+                        ui.ctx().set_theme(theme_pref(&self.cfg.theme));
+                        self.cfg.save();
+                    }
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.link("What changed in this version").clicked() {
+                        notes = true;
+                    }
+                    ui.label("·");
+                    ui.hyperlink_to("Source code and downloads", tasmota_derust_core::REPO_URL);
+                });
+            });
+        if notes {
+            self.open_changelog(ctx, env!("CARGO_PKG_VERSION"));
+        }
+        if !open {
+            self.about_open = false;
+        }
+    }
+
     fn changelog_window(&mut self, ctx: &egui::Context) {
         let Some((version, slot)) = &self.changelog else {
             return;
@@ -1255,15 +1303,10 @@ impl DerustApp {
                     "MQTT messages of all devices: received (<), sent (>) and connection events",
                 );
                 let me = ui
-                    .add(
-                        egui::Label::new(
-                            RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).weak(),
-                        )
-                        .sense(Sense::click()),
-                    )
-                    .on_hover_text("What changed in this version");
+                    .link(concat!("About · v", env!("CARGO_PKG_VERSION")))
+                    .on_hover_text("What Tasmota Derust is, what changed in this version, theme");
                 if me.clicked() {
-                    self.open_changelog(ui.ctx(), env!("CARGO_PKG_VERSION"));
+                    self.about_open = !self.about_open;
                 }
                 let update = github::app_update(&self.app_latest.lock().unwrap());
                 if let Some(v) = update {
@@ -1729,6 +1772,7 @@ impl eframe::App for DerustApp {
         self.settings_window(&ctx);
         self.confirm_dialog(&ctx);
         self.notice_overlay(&ctx);
+        self.about_window(&ctx);
         self.changelog_window(&ctx);
         self.light_window(&ctx);
         self.options_window(&ctx);
@@ -1742,6 +1786,14 @@ impl eframe::App for DerustApp {
 }
 
 // -------------------------------------------------------------------- helpers
+
+fn theme_pref(name: &str) -> egui::ThemePreference {
+    match name {
+        "light" => egui::ThemePreference::Light,
+        "dark" => egui::ThemePreference::Dark,
+        _ => egui::ThemePreference::System,
+    }
+}
 
 fn info_ref<'a>(i: &CellCtx<'a>) -> CellCtx<'a> {
     CellCtx {
