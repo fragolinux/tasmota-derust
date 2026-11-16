@@ -136,6 +136,18 @@ GitHub the first time you open a SetOptions window. Nothing about you or your de
   SetOptions), through its own web server: the same `.dmp` file as Tasmota's Configuration >
   Backup / Restore pages. "Back up first" sits in the SetOptions window too. The device's web
   password is asked only when it has one, and never stored.
+- **Console per device** (the `>_` button next to each device, on the desktop, the web page and
+  Android): that device's MQTT messages, sent and received, and a command line that works like
+  Tasmota's own console (`Status 0`, `Backlog …`). The arrows (or ↑ ↓) go through the commands
+  typed for that device; five **favourite commands**, editable and shared by all devices, put a
+  ready-made command in the command line to edit and send (the defaults only read: status,
+  Wi-Fi and MQTT settings, TelePeriod, Restart). Commands that change the Wi-Fi or MQTT
+  connection or reset the settings (`SSId1 …`, `MqttHost …`, `Reset …`, also inside a Backlog)
+  ask first, since a wrong value cuts the device off. Passwords are hidden in the log and
+  commands with a password are not kept in the history; favourites are saved as plain text, so
+  better without real passwords.
+- **Restart** a device from its gear menu, its Wi-Fi networks window or (Android, phones) its
+  sheet, after a confirmation.
 - Message log panel for troubleshooting.
 - **About**: the version (*About · vX* bottom right on the desktop, the ⓘ link on the web page,
   the ⓘ pill next to the title on Android) says what the app is and opens the list of changes
@@ -165,8 +177,10 @@ devices or network.
 | ![Health view](docs/screenshots/desktop-health.png) | ![Firmware view](docs/screenshots/desktop-firmware.png) |
 | **Wifi: SSID, AP and network of each device** | **MQTT: topic, full topic, group and fallback topics** |
 | ![Wifi view](docs/screenshots/desktop-wifi.png) | ![MQTT view](docs/screenshots/desktop-mqtt.png) |
-| **Message log** | **Broker settings** |
+| **Message log** | **Settings: theme, broker, web server** |
 | ![MQTT message log under the device list](docs/screenshots/desktop-log.png) | ![Settings window](docs/screenshots/desktop-settings.png) |
+| **Console of one device** | **Colour wheel and sliders of a light** |
+| ![Console window: messages, favourite commands, command line](docs/screenshots/desktop-console.png) | ![Light window: colour wheel, brightness, white temperature](docs/screenshots/desktop-light.png) |
 
 **Android**:
 
@@ -175,6 +189,8 @@ devices or network.
 | <img src="docs/screenshots/android-home.png" alt="Device list" width="200"> | <img src="docs/screenshots/android-health.png" alt="Health view" width="200"> | <img src="docs/screenshots/android-firmware.png" alt="Firmware view" width="200"> | <img src="docs/screenshots/android-wifi.png" alt="Wifi view" width="200"> |
 | **MQTT** | **Device details** | **Read-only** | **Settings** |
 | <img src="docs/screenshots/android-mqtt.png" alt="MQTT view" width="200"> | <img src="docs/screenshots/android-device.png" alt="Device detail sheet" width="200"> | <img src="docs/screenshots/android-read-only.png" alt="A command blocked by read-only mode" width="200"> | <img src="docs/screenshots/android-settings.png" alt="Broker settings" width="200"> |
+| **Console** | **Colour wheel** | | |
+| <img src="docs/screenshots/android-console.png" alt="Console of one device" width="200"> | <img src="docs/screenshots/android-light.png" alt="Colour wheel and sliders in the device sheet" width="200"> | | |
 
 ## Desktop app
 

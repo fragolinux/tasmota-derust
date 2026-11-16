@@ -188,7 +188,10 @@ fun rememberDeviceFiles(vm: MainViewModel): DeviceFiles {
  * one in use could leave it unable to reconnect (switch it to the other one first).
  */
 @Composable
-fun WifiDialog(d: Device, readOnly: Boolean, onDismiss: () -> Unit, onReadOnly: () -> Unit, onSave: (Int, String, String) -> Unit) {
+fun WifiDialog(
+    d: Device, readOnly: Boolean, onDismiss: () -> Unit, onReadOnly: () -> Unit,
+    onSave: (Int, String, String) -> Unit, onRestart: () -> Unit,
+) {
     val active = d.ap?.toInt()
     val slot = when (active) { 1 -> 2; 2 -> 1; else -> null }
     val current = if (slot == 1) d.ssid1 else d.ssid2
@@ -242,6 +245,12 @@ fun WifiDialog(d: Device, readOnly: Boolean, onDismiss: () -> Unit, onReadOnly: 
                     )
                     Spacer(Modifier.height(6.dp))
                     Text("The password goes to the device only: it is neither stored nor shown here.", style = MaterialTheme.typography.bodySmall)
+                }
+                if (!confirm) {
+                    Spacer(Modifier.height(10.dp))
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = { if (readOnly) onReadOnly() else onRestart() }, enabled = d.online == true,
+                    ) { Text("Restart") }
                 }
             }
         },

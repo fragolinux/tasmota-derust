@@ -3951,6 +3951,7 @@ dependencies = [
 name = "tasmota-derust-core"
 version = "0.8.3"
 dependencies = [
+ "chrono",
  "crossbeam-channel",
  "directories",
  "ring",

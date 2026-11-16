@@ -10,11 +10,14 @@ import dev.derust.tasmota.core.BackupException
 import dev.derust.tasmota.core.BackupFile
 import dev.derust.tasmota.core.Broker
 import dev.derust.tasmota.core.CommandException
+import dev.derust.tasmota.core.ConsoleLine
+import dev.derust.tasmota.core.Favourite
 import dev.derust.tasmota.core.Options
 import dev.derust.tasmota.core.Session
 import dev.derust.tasmota.core.Snapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -109,7 +112,78 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var search by mutableStateOf("")
 
     init {
+        // Console history and favourites live in the app's files directory.
+        dev.derust.tasmota.core.setDataDir(app.filesDir.path)
         connect()
+    }
+
+    /** What the console screen shows: the device's recent messages and its command history. */
+    data class ConsoleState(val lines: List<ConsoleLine> = emptyList(), val history: List<String> = emptyList())
+
+    /** Device whose console is open. */
+    private val _consoleTopic = MutableStateFlow<String?>(null)
+    val consoleTopic: StateFlow<String?> = _consoleTopic.asStateFlow()
+    private val _console = MutableStateFlow(ConsoleState())
+    val console: StateFlow<ConsoleState> = _console.asStateFlow()
+    private var consoleJob: Job? = null
+
+    /** Favourite console commands (5 slots, shared by all devices). */
+    var favourites by mutableStateOf(dev.derust.tasmota.core.favourites())
+        private set
+
+    fun saveFavourites(list: List<Favourite>) {
+        dev.derust.tasmota.core.setFavourites(list)
+        favourites = dev.derust.tasmota.core.favourites()
+    }
+
+    /** Opens (or, with null, closes) a device's console; its messages are polled while open. */
+    fun openConsole(topic: String?) {
+        consoleJob?.cancel()
+        _consoleTopic.value = topic
+        _console.value = ConsoleState()
+        if (topic == null) return
+        consoleJob = viewModelScope.launch(Dispatchers.Default) {
+            var after = 0uL
+            var from: Session? = null
+            while (true) {
+                val s = session.value
+                if (s !== from) {
+                    // A new connection numbers its messages from the start again.
+                    from = s
+                    after = 0uL
+                    _console.value = ConsoleState()
+                }
+                val v = s?.let { runCatching { it.console(topic, after) }.getOrNull() }
+                if (v != null) {
+                    v.lines.lastOrNull()?.let { after = it.seq }
+                    val lines = if (v.lines.isEmpty()) _console.value.lines
+                    else (_console.value.lines + v.lines).takeLast(CONSOLE_MAX)
+                    _console.value = ConsoleState(lines, v.history)
+                }
+                delay(700)
+            }
+        }
+    }
+
+    /**
+     * Sends a console line; [onSent] runs when the device got it (the screen clears the line).
+     * Lines that can cut the device off need [confirmed] (the screen asks first).
+     */
+    fun consoleSend(topic: String, line: String, confirmed: Boolean, onSent: () -> Unit) {
+        if (readOnly) return readOnlyHit()
+        val s = session.value ?: return
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                s.consoleSend(topic, line, confirmed)
+                withContext(Dispatchers.Main) { onSent() }
+            } catch (e: CommandException.ReadOnly) {
+                readOnlyHit()
+            } catch (e: CommandException) {
+                _messages.tryEmit(e.message ?: "Command refused")
+            } catch (e: IllegalStateException) {
+                // Reconnecting: nothing was sent.
+            }
+        }
     }
 
     fun selectView(v: View) {
@@ -163,6 +237,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun switchAp(topic: String, ap: Int) = command("Switching Wi-Fi…") { it.switchAp(topic, ap.toUByte()) }
 
     fun upgrade(topic: String) = command("Upgrade started") { it.upgrade(topic) }
+    fun restart(topic: String) = command("Restarting…") { it.restart(topic) }
     fun forget(topic: String) = command("Device removed") { it.forget(topic) }
     fun forgetOffline() = command(null) { s ->
         val n = s.forgetOffline().toInt()
@@ -250,6 +325,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // The session was closed while reconnecting; nothing was sent.
             }
         }
+    }
+
+    private companion object {
+        const val CONSOLE_MAX = 300
     }
 
     override fun onCleared() {

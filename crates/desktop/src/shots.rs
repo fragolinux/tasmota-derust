@@ -20,6 +20,7 @@ const STEPS: &[&str] = &[
     "tools",
     "wifi-networks",
     "backup",
+    "console",
     "upgrade",
     "changelog",
     "about",
@@ -68,6 +69,7 @@ impl DerustApp {
             self.tools_open = None;
             self.wifi_open = None;
             self.backup_open = None;
+            self.consoles.clear();
             self.changelog = None;
             self.about_open = false;
             ctx.set_theme(theme_pref(&self.cfg.theme));
@@ -137,6 +139,15 @@ impl DerustApp {
                     self.cfg.view = View::Home;
                     if self.backup_open.is_none() {
                         self.handle_actions(vec![UiAction::OpenBackup("cucina".into())]);
+                    }
+                }
+                "console" => {
+                    self.cfg.view = View::Home;
+                    if self.consoles.is_empty() {
+                        self.handle_actions(vec![UiAction::OpenConsole("cucina".into())]);
+                        if let Some(w) = self.consoles.first_mut() {
+                            w.input = "Power1 TOGGLE".into();
+                        }
                     }
                 }
                 "upgrade" => {

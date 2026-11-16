@@ -54,6 +54,7 @@ pub enum CommandError {
     /// Only devices that are offline (or not answering) can be removed.
     NotOffline,
     Wifi(crate::wifi::WifiError),
+    Console(crate::console::ConsoleError),
 }
 
 impl CommandError {
@@ -79,6 +80,7 @@ impl CommandError {
             CommandError::BadOption => "No such SetOption, or value out of range.",
             CommandError::NotOffline => "Only offline devices can be removed.",
             CommandError::Wifi(e) => e.message(),
+            CommandError::Console(e) => e.message(),
         }
     }
 }
@@ -135,7 +137,7 @@ impl Session {
                                     }
                                 };
                                 match mqtt.upgrade() {
-                                    Some(m) => run_actions(&m, actions),
+                                    Some(m) => run_actions(&shared, &m, actions),
                                     None => break,
                                 }
                             }
@@ -148,7 +150,7 @@ impl Session {
                         }
                         let actions = shared.lock().unwrap().store.check_timeouts();
                         if let Some(m) = mqtt.upgrade() {
-                            run_actions(&m, actions);
+                            run_actions(&shared, &m, actions);
                         }
                     }
                 })
@@ -230,7 +232,7 @@ impl Session {
     /// SSId), so this is allowed in read-only mode too.
     pub fn refresh(&self) {
         let actions = self.shared.lock().unwrap().store.refresh_all();
-        run_actions(&self.mqtt, actions);
+        run_actions(&self.shared, &self.mqtt, actions);
     }
 
     /// Removes an offline device from the list and clears its retained messages on the
@@ -246,7 +248,7 @@ impl Session {
             }
             s.store.forget(topic).ok_or(CommandError::NotOffline)?
         };
-        run_actions(&self.mqtt, actions);
+        run_actions(&self.shared, &self.mqtt, actions);
         (self.notify)();
         Ok(())
     }
@@ -276,7 +278,7 @@ impl Session {
             (n, actions)
         };
         let (n, actions) = actions;
-        run_actions(&self.mqtt, actions);
+        run_actions(&self.shared, &self.mqtt, actions);
         (self.notify)();
         Ok(n)
     }
@@ -309,7 +311,7 @@ impl Session {
             }
             s.store.command(topic, &format!("POWER{n}"), "TOGGLE")
         };
-        run_actions(&self.mqtt, action.into_iter().collect());
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
         Ok(())
     }
 
@@ -323,7 +325,7 @@ impl Session {
             self.guard(&s, topic)?;
             s.store.command(topic, "AP", &n.to_string())
         };
-        run_actions(&self.mqtt, action.into_iter().collect());
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
         Ok(())
     }
 
@@ -344,7 +346,7 @@ impl Session {
                     StartError::NotPossible(_) => CommandError::UpgradeNotPossible,
                 })?
         };
-        run_actions(&self.mqtt, actions);
+        run_actions(&self.shared, &self.mqtt, actions);
         Ok(())
     }
 
@@ -398,7 +400,18 @@ impl Session {
             }
             s.store.command(topic, cmd, &payload)
         };
-        run_actions(&self.mqtt, action.into_iter().collect());
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
+        Ok(())
+    }
+
+    /// `Restart 1`: the device restarts with its current settings.
+    pub fn restart(&self, topic: &str) -> Result<(), CommandError> {
+        let action = {
+            let s = self.shared.lock().unwrap();
+            self.guard(&s, topic)?;
+            s.store.command(topic, "RESTART", "1")
+        };
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
         Ok(())
     }
 
@@ -420,7 +433,7 @@ impl Session {
                 .ok_or(CommandError::NotOfficialOtaUrl)?;
             s.store.command(topic, "OTAURL", &url)
         };
-        run_actions(&self.mqtt, action.into_iter().collect());
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
         Ok(())
     }
 
@@ -451,7 +464,7 @@ impl Session {
                 s.store.command(topic, "STATUS", "3"),
             ]
         };
-        run_actions(&self.mqtt, actions.into_iter().flatten().collect());
+        run_actions(&self.shared, &self.mqtt, actions.into_iter().flatten().collect());
         Ok(())
     }
 
@@ -476,7 +489,7 @@ impl Session {
                 crate::wifi::command(slot, d.ap, ssid, password).map_err(CommandError::Wifi)?;
             s.store.command(topic, "BACKLOG", &payload)
         };
-        run_actions(&self.mqtt, action.into_iter().collect());
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
         Ok(())
     }
 
@@ -516,6 +529,38 @@ impl Session {
         crate::backup::restore(&ip, password, data)
     }
 
+    /// A device's console: its messages after `after` (0: all of them) and its command
+    /// history. Allowed in read-only mode (nothing is sent). None for an unknown device.
+    pub fn console(&self, topic: &str, after: u64) -> Option<ConsoleView> {
+        let lines = {
+            let s = self.shared.lock().unwrap();
+            s.store.devices.get(topic)?;
+            s.store.console.lines(topic, after)
+        };
+        Some(ConsoleView {
+            lines,
+            history: crate::console::history(topic),
+        })
+    }
+
+    /// Sends a line typed in a device's console (`Command payload`, as in Tasmota's own
+    /// console) and adds it to the device's history. A line that can cut the device off
+    /// (Wi-Fi, MQTT, reset: `console::risk`) needs `confirmed`.
+    pub fn console_send(&self, topic: &str, line: &str, confirmed: bool) -> Result<(), CommandError> {
+        let (cmd, payload) = crate::console::parse(line).map_err(CommandError::Console)?;
+        if !confirmed && crate::console::risk(line).is_some() {
+            return Err(CommandError::Console(crate::console::ConsoleError::NeedsConfirm));
+        }
+        let action = {
+            let s = self.shared.lock().unwrap();
+            self.guard(&s, topic)?;
+            s.store.command(topic, &cmd, &payload)
+        };
+        crate::console::remember(topic, line);
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
+        Ok(())
+    }
+
     fn targets(&self) -> crate::ota::Targets {
         let get = |l: &Mutex<Latest>| match &*l.lock().unwrap() {
             Latest::Ok(v) => Some(v.clone()),
@@ -528,7 +573,13 @@ impl Session {
     }
 }
 
-fn run_actions(mqtt: &Mqtt, actions: Vec<Action>) {
+/// Sends the actions; the commands also go to the console of their device. The caller must
+/// not hold the lock.
+fn run_actions(shared: &Mutex<Shared>, mqtt: &Mqtt, actions: Vec<Action>) {
+    if actions.is_empty() {
+        return;
+    }
+    shared.lock().unwrap().store.log_sent(&actions);
     for a in actions {
         match a {
             Action::Publish { topic, payload } => mqtt.publish(&topic, &payload),
@@ -539,6 +590,13 @@ fn run_actions(mqtt: &Mqtt, actions: Vec<Action>) {
 }
 
 // --------------------------------------------------------------------- snapshot
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ConsoleView {
+    pub lines: Vec<crate::console::Line>,
+    /// Commands typed for this device, oldest first.
+    pub history: Vec<String>,
+}
 
 #[derive(Serialize, Clone, Debug)]
 pub struct UpgradeInfo {

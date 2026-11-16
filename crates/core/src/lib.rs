@@ -4,6 +4,7 @@
 pub mod backup;
 pub mod columns;
 pub mod config;
+pub mod console;
 pub mod device;
 pub mod github;
 pub mod light;

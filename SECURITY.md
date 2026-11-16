@@ -87,6 +87,7 @@ decisions behind it, and what each one does **not** protect against. They follow
 |---|---|---|
 | `config.json` | broker host, port, user, **password**; web login user and **password hash**; HTTPS on/off; theme, columns | broker password in **plain text**; web password only as a hash |
 | `web-cert.pem` | the self-signed certificate (public) | none needed |
+| `console.json` | console command history per device, the five favourite commands | plain text; commands with a password never enter the history, favourites are saved as typed |
 | `web-key.pem` | its private key, not encrypted | file permissions: owner only on macOS/Linux (0600); on Windows the user profile's ACLs (the user, SYSTEM, administrators) |
 
 - Nothing is encrypted on disk. Anything running as your user (or an administrator, or

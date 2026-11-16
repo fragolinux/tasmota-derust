@@ -56,6 +56,13 @@ object Icons {
         "M7 11h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z",
         "M8 11V7a4 4 0 0 1 7.9-0.9",
     )
+    val Console = lineIcon(
+        "console",
+        "M6 4h12a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3z",
+        "M7 9.5l3 2.5-3 2.5", "M12.5 15H17",
+    )
+    val Up = lineIcon("up", "M6 15l6-6 6 6")
+    val Down = lineIcon("down", "M6 9l6 6 6-6")
     val Info = lineIcon("info", "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z", "M12 11v6", "M12 7.5v0.01")
     val External = lineIcon("external", "M14 4h6v6", "M20 4l-9 9", "M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5")
 }

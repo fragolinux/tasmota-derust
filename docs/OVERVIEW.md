@@ -166,6 +166,18 @@ Real devices soon showed that Tasmota also says "Online" after a mere Wi-Fi or b
 reconnect, so a fan that had been running for days got a star. From 0.8.3 the star goes by
 the device's **uptime**: only a device that started in the last 5 minutes is marked.
 
+### Next: a console for each device
+
+The tool the original TDM had and this one was missing: a **console per device**, opened from
+a `>_` button next to each device (a square button at the left of each row on Android and on
+phones). It shows that device's MQTT messages, sent and received, with the time; telemetry can
+be hidden. The command line works like Tasmota's own console, with the device's own history
+under the arrows and five editable **favourite commands** shared by all devices (the default
+ones only read settings). Commands that change the Wi-Fi or MQTT connection, or reset the
+settings, ask first. Passwords are hidden in the log and never kept in the history; read-only
+mode shows the messages but sends nothing. Devices can also be **restarted** from the gear
+menu, the Wi-Fi networks window and the device sheet.
+
 ## What each version does today
 
 All three share the same Rust core, so device handling, discovery, upgrade logic, SetOption
@@ -182,6 +194,8 @@ decoding and safety rules are identical everywhere.
 - **Firmware** view: compares each device with the latest release or development build,
   offers the guided **upgrade path** for old firmware, the release/development switch and
   progress for the device being upgraded.
+- A **console** for each device (the `>_` button): its messages, a command line with history
+  and five favourite commands.
 - **MQTT message log** with a filter, for troubleshooting.
 - A built-in **web server** you can start from the desktop app, so phones on the same network
   get the web version without a separate install; it asks whether to start it read-only or
@@ -200,6 +214,7 @@ decoding and safety rules are identical everywhere.
   views, and a bottom sheet with everything about a device and its actions (relays, lights,
   SetOptions, Wi-Fi networks, backup / restore, upgrade).
 - Backups download through the browser and restores upload from it.
+- A **console** for each device, as on the desktop (full screen on phones).
 - A Settings button (a gear on phones): light / dark / system theme remembered per browser,
   and what the server uses (broker, read-only, login, HTTPS). Release notes with the download
   for the visitor's own system.
@@ -216,6 +231,8 @@ decoding and safety rules are identical everywhere.
 - Tap a device for its sheet: relays, colour and brightness for lights, Wi-Fi and firmware
   details, the guided upgrade, SetOptions (full screen), Wi-Fi networks, and backup / restore
   through Android's own save and open dialogs.
+- A square **console** button at the left of each row: the device's messages, a command line
+  with history arrows and the favourite commands.
 - A lock icon in the top bar for read-only mode, which turns back on at every launch.
 - Version and available update next to the title, with the release notes and a direct APK
   download.

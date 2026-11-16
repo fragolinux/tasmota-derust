@@ -254,10 +254,46 @@ dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding
 .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 .gear { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 14px; }
 .gear:hover { color: var(--accent); }
+.gear.con svg { width: 16px; height: 16px; vertical-align: -3px; }
+/* Device sheet: square console button beside the name and status lines. */
+.sheet-top { display: flex; align-items: stretch; gap: 12px; }
+.sheet-title { flex: 1; min-width: 0; }
+.mcon { flex: none; width: 48px; min-height: 44px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2);
+  color: var(--muted); display: flex; align-items: center; justify-content: center; padding: 0; cursor: pointer; }
+.mcon { flex-direction: column; gap: 1px; }
+.mcon svg { width: 22px; height: 22px; }
+.mcon span { font-size: 9.5px; font-weight: 700; letter-spacing: .04em; line-height: 1; }
+.mcon:active { color: var(--accent); }
+
+/* Console */
+dialog#conDlg { max-width: min(900px, calc(100vw - 24px)); width: 900px; padding: 0; overflow: hidden; }
+.con-wrap { display: flex; flex-direction: column; height: 80vh; }
+.con-head { padding: 12px 16px 8px; border-bottom: 1px solid var(--border); }
+.con-head h3 { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.con-favs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+.con-favs .btn { padding: 3px 10px; }
+.con-log { flex: 1; overflow: auto; padding: 8px 16px; font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere; white-space: pre-wrap; }
+.con-log .sent { color: var(--orange); }
+.con-log .ret { color: var(--muted); }
+.con-log.hide-tele .tele { display: none; }
+.con-log .t { color: var(--muted); }
+.con-input { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border);
+  padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+.con-input input { flex: 1; min-width: 0; border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  padding: 7px 9px; border-radius: 6px; font: 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.con-input .btn { width: 38px; padding: 0; flex: none; }
+dialog#favDlg { width: min(680px, calc(100vw - 24px)); max-width: none; }
+.fav-row { display: grid; grid-template-columns: 120px 1fr; gap: 6px; margin: 6px 0; }
+.fav-row input { border: 1px solid var(--border); background: var(--panel-2); color: var(--text); padding: 6px 8px;
+  border-radius: 6px; font: inherit; min-width: 0; }
+.fav-row input.cmd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
 .forget-all { display: flex; justify-content: center; padding: 16px 0 8px; }
 @media (max-width: 760px) {
-  dialog#optDlg { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 16px 16px 0 0; border: 0; }
+  dialog#optDlg, dialog#conDlg { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 16px 16px 0 0; border: 0; }
   .opt-wrap { max-height: 90vh; }
+  .con-wrap { height: 92vh; }
+  .fav-row { grid-template-columns: 1fr; gap: 3px; margin: 10px 0; }
   .so-details { padding-left: 0; }
   .so-main { flex-wrap: wrap; row-gap: 0; }
   /* Number fields under the title, so the title keeps the width. */
@@ -351,6 +387,32 @@ dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding
     <div class="opt-list" id="optList"></div>
   </div>
 </dialog>
+<dialog id="conDlg">
+  <div class="con-wrap">
+    <div class="con-head">
+      <div class="row"><h3 id="conTitle"></h3>
+        <label class="check" title="Hide the STATE and SENSOR messages sent every TelePeriod"><input type="checkbox" id="conTele"> Hide telemetry</label>
+        <button class="btn" id="conClose">Done</button></div>
+      <div class="con-favs" id="conFavs"></div>
+      <div class="opt-note" id="conNote"></div>
+    </div>
+    <div class="con-log" id="conLog"></div>
+    <div class="con-input">
+      <input id="conLine" type="text" placeholder="Command, e.g. Status 0" autocomplete="off" autocapitalize="off"
+        autocorrect="off" spellcheck="false" enterkeyhint="send" aria-label="Command">
+      <button class="btn" id="conOlder" title="Older command (↑)" aria-label="Older command">▲</button>
+      <button class="btn" id="conNewer" title="Newer command (↓)" aria-label="Newer command">▼</button>
+    </div>
+  </div>
+</dialog>
+<dialog id="favDlg">
+  <h3>Favourite commands</h3>
+  <p class="hint">A tap puts the command in the command line, ready to edit and send. Use Backlog for several
+    commands. Parts like &lt;password&gt; must be replaced before sending. Saved as plain text on the computer
+    running the server: avoid real passwords here.</p>
+  <div id="favBody"></div>
+  <div class="dlg-buttons"><button class="btn" id="favCancel">Cancel</button><button class="btn primary" id="favSave">Save</button></div>
+</dialog>
 <dialog id="toolsDlg">
   <h3 id="toolsTitle"></h3>
   <div class="tools">
@@ -358,6 +420,7 @@ dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding
     <button class="btn" data-tool="wifi">Wi-Fi networks</button>
     <button class="btn" data-tool="backup">Back up configuration</button>
     <button class="btn" data-tool="restore">Restore configuration…</button>
+    <button class="btn" data-tool="restart">Restart</button>
   </div>
   <p class="hint">Backup and restore use the device's own web server (the same file as its
     Configuration &gt; Backup / Restore pages).</p>
@@ -366,7 +429,7 @@ dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding
 <dialog id="wifiDlg">
   <h3 id="wifiTitle"></h3>
   <div id="wifiBody"></div>
-  <div class="dlg-buttons"><button class="btn" id="wifiClose">Close</button></div>
+  <div class="dlg-buttons"><button class="btn" id="wifiRestart" title="Restart 1: the device restarts with its current settings">Restart</button><span class="spacer"></span><button class="btn" id="wifiClose">Close</button></div>
 </dialog>
 <dialog id="pwDlg">
   <h3>Web password</h3>
@@ -639,7 +702,7 @@ function render() {
   $("counts").innerHTML = `${data.devices.length} devices · ${online} online · ${offline} offline · ${me}${upd}`;
   $("mver").innerHTML = `${me}${upd}`;
   $("banner").innerHTML = data.read_only
-    ? `<div class="banner d-only">Read-only mode: you can look, but relays, Wi-Fi switching and upgrades are disabled. ${esc(data.read_only_hint || "")}</div>`
+    ? `<div class="banner d-only">Read-only mode: you can look, but relays, Wi-Fi switching, SetOptions, console commands and upgrades are disabled. ${esc(data.read_only_hint || "")}</div>`
     : !data.login ? `<div class="banner risk">${NO_LOGIN_RISK}${data.https ? "" : NO_TLS}</div>` : "";
 
   // Per-view info
@@ -687,7 +750,7 @@ function renderTable(list) {
   for (const c of cols) h += `<th data-sort="${c}" ${arrow(c)}>${COLS[c].t}</th>`;
   h += `</tr></thead><tbody>`;
   for (const d of list) {
-    h += `<tr class="${d.online === false ? "offline" : ""}${d.new ? " new" : ""}" ${d.upgrading && d.online === false ? 'title="Upgrading: restarting…"' : ""}><td><span class="devname">${bars(d)}${nameHtml(d)}${d.online !== false && !docMode.bare ? `<button class="gear" data-act="tools" data-topic="${esc(d.topic)}" title="SetOptions, Wi-Fi networks, backup" aria-label="Device tools">⚙</button>` : ""}${d.online === false && !docMode.bare ? `<button class="gear" data-act="forget" data-topic="${esc(d.topic)}" title="Remove this offline device from the list" aria-label="Remove device">✕</button>` : ""}</span></td>`;
+    h += `<tr class="${d.online === false ? "offline" : ""}${d.new ? " new" : ""}" ${d.upgrading && d.online === false ? 'title="Upgrading: restarting…"' : ""}><td><span class="devname">${bars(d)}${nameHtml(d)}${d.online !== false && !docMode.bare ? `<button class="gear" data-act="tools" data-topic="${esc(d.topic)}" title="SetOptions, Wi-Fi networks, backup" aria-label="Device tools">⚙</button>` : ""}${!docMode.bare ? `<button class="gear con" data-act="console" data-topic="${esc(d.topic)}" title="Console: this device's MQTT messages, send commands" aria-label="Console">${svg(CONSOLE_ICON)}</button>` : ""}${d.online === false && !docMode.bare ? `<button class="gear" data-act="forget" data-topic="${esc(d.topic)}" title="Remove this offline device from the list" aria-label="Remove device">✕</button>` : ""}</span></td>`;
     for (const c of cols) h += `<td class="${COLS[c].num && !["rssi", "ap"].includes(c) ? "num" : ""}">${cellHtml(d, c)}</td>`;
     h += `</tr>`;
   }
@@ -702,6 +765,7 @@ const ICONS = {
   wifi: `<path d="M2 9a15 15 0 0 1 20 0"/><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor"/>`,
   mqtt: `<path d="M4 7h13l-3-3M20 17H7l3 3"/>`,
 };
+const CONSOLE_ICON = `<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15H17"/>`;
 const INFO_ICON = `<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r="0.6" fill="currentColor"/>`;
 const svg = p => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
 const rssiChip = d => d.rssi == null || d.online === false ? "" : `<span class="rssi" style="background:${rssiColor(d.rssi)}">${d.rssi}</span>`;
@@ -783,8 +847,9 @@ function renderSheet() {
   const off = d.online === false;
   const two = !!data.ssids[1];
   let h = `<div class="grabber"></div>
-    <div class="sheet-head">${bars(d)}<h3>${esc(d.name)}</h3><button class="btn" id="sheetClose">Done</button></div>
-    <div class="sheet-sub">${off ? offLabel(d) : d.online ? "Online" : "Waiting for an answer…"}${d.module ? " · " + esc(d.module) : ""}</div>`;
+    <div class="sheet-top"><button class="mcon" data-act="console" data-topic="${esc(d.topic)}" title="Console" aria-label="Console">${svg(CONSOLE_ICON)}<span>CLI</span></button>
+    <div class="sheet-title"><div class="sheet-head">${bars(d)}<h3>${esc(d.name)}</h3><button class="btn" id="sheetClose">Done</button></div>
+    <div class="sheet-sub">${off ? offLabel(d) : d.online ? "Online" : "Waiting for an answer…"}${d.module ? " · " + esc(d.module) : ""}</div></div></div>`;
   if (d.power.length) h += `<div class="card-relays">${relaysHtml(d, true)}</div>`;
   h += `<div class="sheet-actions">`;
   if (!off && d.web_url) h += `<a class="btn" href="${esc(d.web_url)}" target="_blank" rel="noopener">Open web UI</a>`;
@@ -795,7 +860,8 @@ function renderSheet() {
   if (d.has_options) h += `<button class="btn" data-act="options" data-topic="${esc(d.topic)}">SetOptions</button>`;
   if (!off) h += `<button class="btn" data-act="wifi" data-topic="${esc(d.topic)}">Wi-Fi networks</button>
     <button class="btn" data-act="backup" data-topic="${esc(d.topic)}">Back up</button>
-    <button class="btn" data-act="restore" data-topic="${esc(d.topic)}">Restore</button>`;
+    <button class="btn" data-act="restore" data-topic="${esc(d.topic)}">Restore</button>
+    <button class="btn" data-act="restart" data-topic="${esc(d.topic)}">Restart</button>`;
   if (off) h += `<button class="btn" data-act="forget" data-topic="${esc(d.topic)}">Remove from list</button>`;
   h += updateHtml(d) + `</div>`;
   for (const [title, cols] of SECTIONS) {
@@ -858,6 +924,8 @@ async function onAction(btn) {
   if (btn.dataset.act === "light") return openLight(t);
   if (btn.dataset.act === "options") return openOptions(t);
   if (btn.dataset.act === "tools") return openTools(t);
+  if (btn.dataset.act === "console") return openConsole(t);
+  if (btn.dataset.act === "restart") return restartDevice(t);
   if (btn.dataset.act === "wifi") return openWifi(t);
   if (btn.dataset.act === "backup") return backupDevice(t);
   if (btn.dataset.act === "restore") return pickRestore(t);
@@ -1012,7 +1080,7 @@ async function showSettings() {
     ? `<p><b>MQTT broker</b><br>${data.connected ? `Connected to ${esc(data.broker)}` : `Disconnected: ${esc(data.status)}`}</p>
        <p style="color:var(--muted)">Set where the server runs: in the desktop app's Settings, or with the
        DERUST_MQTT_HOST, DERUST_MQTT_PORT, DERUST_MQTT_USER and DERUST_MQTT_PASSWORD variables.</p>
-       <p><b>Read-only</b><br>${data.read_only ? `On: relays, Wi-Fi switching and upgrades are disabled. ${esc(data.read_only_hint || "")}`
+       <p><b>Read-only</b><br>${data.read_only ? `On: relays, Wi-Fi switching, SetOptions, console commands and upgrades are disabled. ${esc(data.read_only_hint || "")}`
          : "Off: commands are sent to the devices."}</p>
        <p><b>Login</b><br>${data.login ? "Required for every visitor." : "None: anyone on this network can open this page."}</p>
        <p style="color:var(--muted)">Set where the server runs: in the desktop app's Settings (Web server login), or with
@@ -1317,6 +1385,156 @@ $("optChanged").addEventListener("change", renderOptions);
 $("optClose").addEventListener("click", () => $("optDlg").close());
 $("optDlg").addEventListener("close", () => { opt.topic = null; });
 
+// ---------------------------------------------------------------- console
+// One device's MQTT messages (kept by the server, polled every second) and a command line
+// with that device's history (arrows) and the shared favourite commands.
+const con = { topic: null, after: 0, history: [], pos: null, timer: null, favs: [] };
+const CON_MAX = 300;
+
+async function openConsole(topic) {
+  const d = byTopic(topic);
+  if (!d) return;
+  Object.assign(con, { topic, after: 0, history: [], pos: null });
+  $("conTitle").textContent = `${d.name} — Console`;
+  $("conLog").innerHTML = "";
+  $("conLine").value = "";
+  $("conLog").classList.toggle("hide-tele", $("conTele").checked);
+  $("conDlg").showModal();
+  conNote();
+  loadFavourites();
+  await pollConsole();
+  clearInterval(con.timer);
+  con.timer = setInterval(pollConsole, 1000);
+  if (!narrow.matches) $("conLine").focus();
+}
+
+function conNote() {
+  const d = byTopic(con.topic);
+  $("conNote").innerHTML = data.read_only
+    ? `<span class="warn-text">Read-only mode is on: messages are shown, commands are not sent.</span>`
+    : d && d.online !== true ? `<span class="warn-text">The device is not online: commands are not sent.</span>` : "";
+}
+
+async function pollConsole() {
+  if (!con.topic || !$("conDlg").open) return;
+  let v;
+  try {
+    const r = await fetch(`/api/devices/${encodeURIComponent(con.topic)}/console?after=${con.after}`, { cache: "no-store" });
+    if (!r.ok) return;
+    v = await r.json();
+  } catch { return; }
+  con.history = v.history;
+  conNote();
+  if (!v.lines.length) {
+    if (!con.after && !$("conLog").children.length) $("conLog").innerHTML = `<div class="t">No messages yet.</div>`;
+    return;
+  }
+  const log = $("conLog");
+  if (!con.after) log.innerHTML = "";
+  const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const tele = t => /\/(STATE|SENSOR)$/.test(t);
+  log.insertAdjacentHTML("beforeend", v.lines.map(l =>
+    `<div class="${l.sent ? "sent" : l.retained ? "ret" : ""}${!l.sent && tele(l.topic) ? " tele" : ""}"><span class="t">${esc(l.time)}</span> ${l.sent ? "&gt;" : "&lt;"} ${esc(l.topic)}${l.retained ? " (retained)" : ""}  ${esc(l.payload)}</div>`).join(""));
+  while (log.children.length > CON_MAX) log.firstElementChild.remove();
+  con.after = v.lines[v.lines.length - 1].seq;
+  if (atEnd) log.scrollTop = log.scrollHeight;
+}
+
+async function sendConsole(confirm = false) {
+  const line = $("conLine").value.trim();
+  if (!line || !con.topic) return;
+  if (data.read_only) return readOnlyNotice();
+  try {
+    const r = await fetch(`/api/devices/${encodeURIComponent(con.topic)}/console`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ line, confirm }) });
+    // 428: the command can cut the device off (Wi-Fi, MQTT, reset): ask, then send confirmed.
+    if (r.status === 428) {
+      const why = await r.text(), d = byTopic(con.topic);
+      const ok = await confirmDialog(`Send this to ${d ? d.name : con.topic}?`,
+        `<p class="mono" style="overflow-wrap:anywhere">${esc(line)}</p><p class="warn-text">${esc(why)}</p>`, "Send anyway");
+      if (ok) return sendConsole(true);
+      return;
+    }
+    if (!r.ok) return toast(await r.text() || `Error ${r.status}`);
+  } catch { return toast("Server not reachable"); }
+  $("conLine").value = ""; con.pos = null;
+  const log = $("conLog"); log.scrollTop = log.scrollHeight;
+  setTimeout(pollConsole, 300);
+}
+
+// Same rule as the core (console::browse): older stops at the oldest, newer past the newest
+// goes back to an empty line.
+function browseHistory(older) {
+  const n = con.history.length;
+  if (!n) return;
+  if (older) con.pos = con.pos == null ? n - 1 : Math.max(0, con.pos - 1);
+  else con.pos = con.pos == null || con.pos + 1 >= n ? null : con.pos + 1;
+  const inp = $("conLine");
+  inp.value = con.pos == null ? "" : con.history[con.pos];
+  inp.focus();
+  inp.setSelectionRange(inp.value.length, inp.value.length);
+}
+
+async function loadFavourites() {
+  try {
+    const r = await fetch("/api/console/favourites", { cache: "no-store" });
+    if (r.ok) con.favs = await r.json();
+  } catch {}
+  $("conFavs").innerHTML = con.favs.map((f, i) => f.command
+    ? `<button class="btn" data-fav="${i}" title="${esc(f.command)}">${esc(f.name || f.command)}</button>` : "").join("") +
+    `<button class="btn" id="favEdit" title="Edit the favourite commands">Edit…</button>`;
+}
+
+$("conFavs").addEventListener("click", e => {
+  const b = e.target.closest("[data-fav]");
+  if (b) {
+    const inp = $("conLine");
+    inp.value = con.favs[+b.dataset.fav].command; con.pos = null;
+    inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length);
+    return;
+  }
+  if (e.target.id === "favEdit") {
+    $("favBody").innerHTML = con.favs.map((f, i) => `<div class="fav-row">
+      <input data-fav-name="${i}" value="${esc(f.name)}" placeholder="Name" autocomplete="off">
+      <input class="cmd" data-fav-cmd="${i}" value="${esc(f.command)}" placeholder="Command" autocomplete="off" autocapitalize="off" spellcheck="false"></div>`).join("");
+    $("favDlg").showModal();
+  }
+});
+$("favCancel").addEventListener("click", () => $("favDlg").close());
+$("favSave").addEventListener("click", async () => {
+  const list = con.favs.map((_, i) => ({
+    name: $("favBody").querySelector(`[data-fav-name="${i}"]`).value,
+    command: $("favBody").querySelector(`[data-fav-cmd="${i}"]`).value }));
+  try {
+    const r = await fetch("/api/console/favourites", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(list) });
+    if (!r.ok) return toast(await r.text() || `Error ${r.status}`);
+  } catch { return toast("Server not reachable"); }
+  $("favDlg").close();
+  loadFavourites();
+});
+$("conLine").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); sendConsole(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); browseHistory(true); }
+  else if (e.key === "ArrowDown") { e.preventDefault(); browseHistory(false); }
+});
+$("conOlder").addEventListener("click", () => browseHistory(true));
+$("conNewer").addEventListener("click", () => browseHistory(false));
+$("conTele").addEventListener("change", e => $("conLog").classList.toggle("hide-tele", e.target.checked));
+$("conClose").addEventListener("click", () => $("conDlg").close());
+$("conDlg").addEventListener("close", () => { con.topic = null; clearInterval(con.timer); });
+
+// Restart 1, after asking.
+async function restartDevice(topic) {
+  const d = byTopic(topic); if (!d) return;
+  if (data.read_only) return readOnlyNotice();
+  const ok = await confirmDialog(`Restart ${d.name}?`,
+    `<p>The device restarts with its current settings (<span class="mono">Restart 1</span>) and is back in a few seconds.</p>`, "Restart");
+  if (!ok) return;
+  post(`/api/devices/${encodeURIComponent(topic)}/restart`);
+  toast(`${d.name} is restarting`);
+}
+
 // ---------------------------------------------------------------- device tools
 function openTools(topic) {
   const d = byTopic(topic); if (!d) return;
@@ -1325,7 +1543,7 @@ function openTools(topic) {
   dlg.querySelector('[data-tool="options"]').disabled = !d.has_options;
   dlg.querySelectorAll("[data-tool]").forEach(b => b.onclick = () => {
     dlg.close();
-    ({ options: openOptions, wifi: openWifi, backup: backupDevice, restore: pickRestore })[b.dataset.tool](topic);
+    ({ options: openOptions, wifi: openWifi, backup: backupDevice, restore: pickRestore, restart: restartDevice })[b.dataset.tool](topic);
   });
   $("toolsClose").onclick = () => dlg.close();
   dlg.showModal();
@@ -1441,6 +1659,7 @@ function openWifi(topic) {
     } catch (e) { toast("Server not reachable"); }
   });
   $("wifiClose").onclick = () => $("wifiDlg").close();
+  $("wifiRestart").onclick = () => restartDevice(topic);
   $("wifiDlg").showModal();
 }
 $("optBackup").addEventListener("click", () => { if (opt.topic) backupDevice(opt.topic); });

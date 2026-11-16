@@ -113,6 +113,7 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
 
     val files = rememberDeviceFiles(vm)
     var wifiTopic by rememberSaveable { mutableStateOf<String?>(null) }
+    var restartTopic by rememberSaveable { mutableStateOf<String?>(null) }
 
     // null: hidden; true: a command was blocked; false: the lock was tapped.
     var askUnlock by remember { mutableStateOf<Boolean?>(null) }
@@ -274,6 +275,8 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             onBackup = { files.backup(open) },
             onRestore = { files.restore(open) },
             onForget = { vm.forget(open.topic) },
+            onConsole = { vm.openConsole(open.topic) },
+            onRestart = { restartTopic = open.topic },
             readOnly = vm.readOnly,
             onReadOnly = vm::readOnlyHit,
         )
@@ -294,6 +297,21 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             onBackup = { files.backup(optDevice) },
         )
     }
+    val conTopic by vm.consoleTopic.collectAsStateWithLifecycle()
+    val conState by vm.console.collectAsStateWithLifecycle()
+    val conDevice = s?.devices?.firstOrNull { it.topic == conTopic }
+    if (conTopic != null && conDevice != null) {
+        ConsoleScreen(
+            name = conDevice.name,
+            online = conDevice.online == true,
+            readOnly = vm.readOnly,
+            state = conState,
+            favourites = vm.favourites,
+            onClose = { vm.openConsole(null) },
+            onSend = { line, confirmed, sent -> vm.consoleSend(conDevice.topic, line, confirmed, sent) },
+            onSaveFavourites = vm::saveFavourites,
+        )
+    }
     val wifiDevice = s?.devices?.firstOrNull { it.topic == wifiTopic }
     if (wifiTopic != null && wifiDevice != null) {
         WifiDialog(
@@ -301,6 +319,19 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             onDismiss = { wifiTopic = null },
             onReadOnly = vm::readOnlyHit,
             onSave = { slot, ssid, pw -> vm.setWifi(wifiDevice.topic, slot, ssid, pw) },
+            onRestart = { restartTopic = wifiDevice.topic },
+        )
+    }
+    val restartDevice = s?.devices?.firstOrNull { it.topic == restartTopic }
+    if (restartTopic != null && restartDevice != null) {
+        AlertDialog(
+            onDismissRequest = { restartTopic = null },
+            title = { Text("Restart ${restartDevice.name}?") },
+            text = { Text("The device restarts with its current settings (Restart 1) and is back in a few seconds.") },
+            confirmButton = {
+                TextButton(onClick = { vm.restart(restartDevice.topic); restartTopic = null }) { Text("Restart") }
+            },
+            dismissButton = { TextButton(onClick = { restartTopic = null }) { Text("Cancel") } },
         )
     }
 
@@ -311,9 +342,9 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             text = {
                 Text(
                     if (blocked) {
-                        "Nothing was sent. While read-only is on, relays, Wi-Fi switching, SetOptions and upgrades are blocked."
+                        "Nothing was sent. While read-only is on, relays, Wi-Fi switching, SetOptions, console commands and upgrades are blocked."
                     } else {
-                        "Relays, Wi-Fi switching, SetOptions and upgrades will be sent to the devices."
+                        "Relays, Wi-Fi switching, SetOptions, console commands and upgrades will be sent to the devices."
                     } + " Read-only turns back on every time the app starts.",
                 )
             },

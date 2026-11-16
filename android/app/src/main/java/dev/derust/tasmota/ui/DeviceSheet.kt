@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -77,6 +80,8 @@ fun DeviceSheet(
     onBackup: () -> Unit,
     onRestore: () -> Unit,
     onForget: () -> Unit,
+    onConsole: () -> Unit,
+    onRestart: () -> Unit,
     /** Read-only mode (app-wide). Commands stay tappable and explain why nothing happens. */
     readOnly: Boolean,
     onReadOnly: () -> Unit,
@@ -91,21 +96,28 @@ fun DeviceSheet(
             Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp).padding(bottom = 24.dp).navigationBarsPadding(),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SignalBars(d)
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    d.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
-                )
+            // Console button at the left, as tall as the name and status lines.
+            Row(Modifier.height(IntrinsicSize.Min), verticalAlignment = Alignment.CenterVertically) {
+                ConsoleButton(onConsole, Modifier.fillMaxHeight().aspectRatio(1f))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        SignalBars(d)
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            d.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Text(
+                        listOfNotNull(
+                            when (d.online) { true -> "Online"; false -> d.offlineLabel; null -> "Waiting for an answer…" },
+                            d.module,
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-            Text(
-                listOfNotNull(
-                    when (d.online) { true -> "Online"; false -> d.offlineLabel; null -> "Waiting for an answer…" },
-                    d.module,
-                ).joinToString(" · "),
-                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
 
             if (d.power.isNotEmpty()) {
                 Spacer(Modifier.height(16.dp))
@@ -139,6 +151,9 @@ fun DeviceSheet(
                     OutlinedButton(onClick = onWifi) { Text("Wi-Fi networks") }
                     OutlinedButton(onClick = onBackup) { Text("Back up") }
                     OutlinedButton(onClick = onRestore) { Text("Restore") }
+                    OutlinedButton(onClick = { if (readOnly) onReadOnly() else onRestart() }, enabled = canCommand) {
+                        Text("Restart")
+                    }
                 }
                 val plan = d.upgradePlan
                 if (!d.upgradeBusy && d.canSwitchChannel) {

@@ -11,6 +11,7 @@ use egui_extras::{Column as TCol, TableBuilder};
 
 use tasmota_derust_core::columns::{Col, View};
 use tasmota_derust_core::config::{BrokerConfig, Config, WebLogin};
+use tasmota_derust_core::console;
 use tasmota_derust_core::device::{self, Action, Device, StartError, Store, UpgradePhase};
 use tasmota_derust_core::github::{self, Latest};
 use tasmota_derust_core::light;
@@ -55,6 +56,10 @@ enum Confirm {
     Forget(String),
     /// The same for every offline device.
     ForgetOffline,
+    /// `Restart 1`.
+    Restart(String),
+    /// A console line that can cut the device off (Wi-Fi, MQTT, reset): device, line.
+    Console(String, String),
 }
 
 /// Wi-Fi networks window of one device: the slot being edited and what was typed.
@@ -69,6 +74,34 @@ struct WifiWindow {
 type BackupSlot = Arc<Mutex<Option<Result<String, backup::BackupError>>>>;
 
 /// Backup / restore window of one device.
+/// One device's console.
+struct ConsoleWindow {
+    key: String,
+    input: String,
+    /// Where the arrows are in the history (None: the line being typed).
+    hist_pos: Option<usize>,
+    hide_telemetry: bool,
+    /// Favourites being edited (None: not editing).
+    edit_favourites: Option<Vec<console::Favourite>>,
+    error: Option<String>,
+    /// Put the cursor in the command line on the next frame.
+    focus: bool,
+}
+
+impl ConsoleWindow {
+    fn new(key: String) -> ConsoleWindow {
+        ConsoleWindow {
+            key,
+            input: String::new(),
+            hist_pos: None,
+            hide_telemetry: false,
+            edit_favourites: None,
+            error: None,
+            focus: true,
+        }
+    }
+}
+
 struct BackupWindow {
     key: String,
     /// The device's web password, only when it has one (kept while the window is open).
@@ -103,10 +136,12 @@ enum UiAction {
     OpenOptions(String),
     OpenWifi(String),
     OpenBackup(String),
+    OpenConsole(String),
     /// The gear's menu, at that screen position.
     OpenTools(String, egui::Pos2),
     AskForget(String),
     AskForgetOffline,
+    AskRestart(String),
     Sort(Option<Col>),
 }
 
@@ -167,6 +202,8 @@ pub struct DerustApp {
     options_open: Option<OptionsWindow>,
     wifi_open: Option<WifiWindow>,
     backup_open: Option<BackupWindow>,
+    /// Device consoles, one window per device.
+    consoles: Vec<ConsoleWindow>,
     /// The gear's menu: device, where it opens, and "opened this frame" (that click is not
     /// a click outside it).
     tools_open: Option<(String, egui::Pos2, bool)>,
@@ -210,6 +247,7 @@ impl DerustApp {
             options_open: None,
             wifi_open: None,
             backup_open: None,
+            consoles: Vec::new(),
             tools_open: None,
             #[cfg(feature = "screenshots")]
             shots: shots::Shots::from_env(),
@@ -294,13 +332,14 @@ impl DerustApp {
     }
 
     fn apply(&mut self, actions: Vec<Action>) {
+        self.store.log_sent(&actions);
         for a in actions {
             match a {
                 Action::Publish { topic, payload } => {
                     if let Some(m) = &self.mqtt {
                         m.publish(&topic, &payload);
                     }
-                    self.push_log('>', &topic, &payload);
+                    self.push_log('>', &topic, &console::mask(&topic, &payload));
                 }
                 Action::Subscribe(topic) => {
                     if let Some(m) = &self.mqtt {
@@ -441,8 +480,8 @@ impl DerustApp {
             RichText::new("Read-only")
         };
         let r = ui.checkbox(&mut self.read_only, label).on_hover_text(
-            "When ticked, only read queries are sent from this window: relays, Wi-Fi switching \
-             and upgrades are refused. Ticked at every start. The web server's mode is chosen \
+            "When ticked, only read queries are sent from this window: relays, Wi-Fi switching, \
+             SetOptions, console commands and upgrades are refused. Ticked at every start. The web server's mode is chosen \
              when it starts.",
         );
         if r.changed() {
@@ -640,6 +679,198 @@ impl DerustApp {
     }
 
     /// The SetOptions of one device, grouped by category, with search and switches.
+    /// Sends a console line to a device. Err: why nothing was sent.
+    /// A line that can cut the device off (`console::risk`) opens a confirmation first,
+    /// unless `confirmed`, and returns an empty Err: the input stays until it is sent.
+    fn console_send(&mut self, key: &str, line: &str, confirmed: bool) -> Result<(), String> {
+        let (cmd, payload) = console::parse(line).map_err(|e| e.message().to_string())?;
+        if self.read_only {
+            return Err(READ_ONLY_NOTICE.into());
+        }
+        if !confirmed && console::risk(line).is_some() {
+            self.confirm = Some(Confirm::Console(key.to_string(), line.to_string()));
+            return Err(String::new());
+        }
+        let a = self
+            .store
+            .command(key, &cmd, &payload)
+            .ok_or("The device is not online: commands only go to devices that answer.")?;
+        console::remember(key, line);
+        self.apply(vec![a]);
+        Ok(())
+    }
+
+    fn console_windows(&mut self, ctx: &egui::Context) {
+        let mut wins = std::mem::take(&mut self.consoles);
+        wins.retain_mut(|w| {
+            let Some(d) = self.store.devices.get(&w.key) else {
+                return false;
+            };
+            let name = d.display_name().to_string();
+            let online = d.is_online();
+            let lines = self.store.console.lines(&w.key, 0);
+            let history = console::history(&w.key);
+            let mut open = true;
+            let mut send: Option<String> = None;
+            egui::Window::new(format!("{name} — Console"))
+                .id(egui::Id::unique("console-window").with(&w.key))
+                .open(&mut open)
+                .collapsible(true)
+                .resizable(true)
+                .default_size([720.0, 420.0])
+                .show(ctx, |ui| {
+                    if let Some(favs) = &mut w.edit_favourites {
+                        let mut done = None;
+                        favourites_editor(ui, favs, &mut done);
+                        match done {
+                            Some(true) => {
+                                console::set_favourites(favs.clone());
+                                w.edit_favourites = None;
+                            }
+                            Some(false) => w.edit_favourites = None,
+                            None => {}
+                        }
+                        return;
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("Favourites:").weak());
+                        for f in console::favourites() {
+                            if f.command.is_empty() {
+                                continue;
+                            }
+                            let label = if f.name.is_empty() { &f.command } else { &f.name };
+                            if ui
+                                .button(label)
+                                .on_hover_text(format!("Put in the command line: {}", f.command))
+                                .clicked()
+                            {
+                                w.input = f.command.clone();
+                                w.hist_pos = None;
+                                w.focus = true;
+                            }
+                        }
+                        if ui.small_button("Edit…").clicked() {
+                            w.edit_favourites = Some(console::favourites());
+                        }
+                        ui.separator();
+                        ui.checkbox(&mut w.hide_telemetry, "Hide telemetry")
+                            .on_hover_text("Hide the STATE and SENSOR messages sent every TelePeriod");
+                    });
+                    if self.read_only {
+                        ui.colored_label(ORANGE, "Read-only mode is on: messages are shown, commands are not sent.");
+                    } else if !online {
+                        ui.colored_label(RED, "The device is not online: commands are not sent.");
+                    }
+                    // Command line at the bottom, messages above it.
+                    egui::Panel::bottom(egui::Id::unique("console-input").with(&w.key))
+                        .frame(egui::Frame::NONE)
+                        .show(ui, |ui| {
+                            if let Some(e) = &w.error {
+                                ui.colored_label(RED, e);
+                            }
+                            ui.horizontal(|ui| {
+                                let arrows = ui.spacing().interact_size.y * 2.0
+                                    + ui.spacing().item_spacing.x * 3.0;
+                                let r = ui.add(
+                                    egui::TextEdit::singleline(&mut w.input)
+                                        .font(egui::TextStyle::Monospace)
+                                        .hint_text("Command, e.g. Status 0 — Enter sends, ↑ ↓ history")
+                                        .desired_width(ui.available_width() - arrows),
+                                );
+                                if w.focus {
+                                    r.request_focus();
+                                    w.focus = false;
+                                }
+                                let mut step = None;
+                                if r.has_focus() {
+                                    ui.input(|i| {
+                                        if i.key_pressed(egui::Key::ArrowUp) {
+                                            step = Some(true);
+                                        } else if i.key_pressed(egui::Key::ArrowDown) {
+                                            step = Some(false);
+                                        }
+                                    });
+                                }
+                                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                    send = Some(w.input.clone());
+                                    w.focus = true;
+                                }
+                                let older_ok = !history.is_empty() && w.hist_pos != Some(0);
+                                if history_button(ui, true, older_ok)
+                                    .on_hover_text("Older command")
+                                    .clicked()
+                                {
+                                    step = Some(true);
+                                }
+                                if history_button(ui, false, w.hist_pos.is_some())
+                                    .on_hover_text("Newer command")
+                                    .clicked()
+                                {
+                                    step = Some(false);
+                                }
+                                if let Some(older) = step {
+                                    w.hist_pos = console::browse(history.len(), w.hist_pos, older);
+                                    w.input = w
+                                        .hist_pos
+                                        .map(|i| history[i].clone())
+                                        .unwrap_or_default();
+                                    w.focus = true;
+                                }
+                            });
+                        });
+                    egui::ScrollArea::vertical()
+                        .stick_to_bottom(true)
+                        .auto_shrink(false)
+                        .show(ui, |ui| {
+                            let shown: Vec<&console::Line> = lines
+                                .iter()
+                                .filter(|l| !(w.hide_telemetry && console::is_telemetry(&l.topic)))
+                                .collect();
+                            if shown.is_empty() {
+                                ui.label(RichText::new("No messages yet.").weak());
+                            }
+                            for l in shown {
+                                let color = if l.sent {
+                                    ORANGE
+                                } else if l.retained {
+                                    ui.visuals().weak_text_color()
+                                } else {
+                                    ui.visuals().text_color()
+                                };
+                                let mark = if l.sent { '>' } else { '<' };
+                                let retained = if l.retained { " (retained)" } else { "" };
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(format!(
+                                            "{} {mark} {}{retained}  {}",
+                                            l.time, l.topic, l.payload
+                                        ))
+                                        .monospace()
+                                        .color(color),
+                                    )
+                                    .wrap(),
+                                );
+                            }
+                        });
+                });
+            if let Some(line) = send {
+                match self.console_send(&w.key, &line, false) {
+                    Ok(()) => {
+                        w.input.clear();
+                        w.hist_pos = None;
+                        w.error = None;
+                    }
+                    // Empty: a confirmation was opened.
+                    Err(e) => w.error = (!e.is_empty()).then_some(e),
+                }
+            }
+            open
+        });
+        // Windows opened meanwhile (none today) stay too.
+        wins.append(&mut self.consoles);
+        self.consoles = wins;
+    }
+
     fn options_window(&mut self, ctx: &egui::Context) {
         let Some(mut w) = self.options_open.take() else {
             return;
@@ -784,6 +1015,13 @@ impl DerustApp {
                     {
                         picked = Some(UiAction::OpenBackup(key.clone()));
                     }
+                    if ui
+                        .add(egui::Button::new("Restart…").frame(false))
+                        .on_hover_text("Restart 1: the device restarts with its current settings")
+                        .clicked()
+                    {
+                        picked = Some(UiAction::AskRestart(key.clone()));
+                    }
                 });
             });
         let clicked_outside = !fresh
@@ -816,6 +1054,7 @@ impl DerustApp {
         let online = d.is_online();
         let mut open = true;
         let mut send = false;
+        let mut restart = false;
         let slot = match active {
             Some(1) => Some(2u8),
             Some(2) => Some(1u8),
@@ -855,6 +1094,13 @@ impl DerustApp {
                         ui.end_row();
                     }
                 });
+                if ui
+                    .add_enabled(online, egui::Button::new("Restart…"))
+                    .on_hover_text("Restart 1: the device restarts with its current settings")
+                    .clicked()
+                {
+                    restart = true;
+                }
                 ui.separator();
                 let Some(slot) = slot else {
                     ui.colored_label(ORANGE, "Which network the device is using is not known yet: press Refresh.");
@@ -917,6 +1163,9 @@ impl DerustApp {
                     });
                 }
             });
+        if restart {
+            self.handle_actions(vec![UiAction::AskRestart(w.key.clone())]);
+        }
         if send {
             if self.read_only {
                 self.show_notice(READ_ONLY_NOTICE);
@@ -1692,6 +1941,7 @@ impl DerustApp {
                 | UiAction::SetChannel(..)
                 | UiAction::AskForget(_)
                 | UiAction::AskForgetOffline
+                | UiAction::AskRestart(_)
                     if self.read_only =>
                 {
                     self.show_notice(READ_ONLY_NOTICE);
@@ -1752,9 +2002,15 @@ impl DerustApp {
                 UiAction::OpenWeb(url) => {
                     let _ = open::that(url);
                 }
+                UiAction::OpenConsole(key) => {
+                    if !self.consoles.iter().any(|w| w.key == key) {
+                        self.consoles.push(ConsoleWindow::new(key));
+                    }
+                }
                 UiAction::AskUpgrade(key) => self.confirm = Some(Confirm::Upgrade(key)),
                 UiAction::AskForget(key) => self.confirm = Some(Confirm::Forget(key)),
                 UiAction::AskForgetOffline => self.confirm = Some(Confirm::ForgetOffline),
+                UiAction::AskRestart(key) => self.confirm = Some(Confirm::Restart(key)),
                 UiAction::AskAp(key, n) => self.confirm = Some(Confirm::SwitchAp(key, n)),
                 UiAction::Sort(c) => {
                     if self.sort == c {
@@ -2000,7 +2256,9 @@ impl DerustApp {
             Confirm::Upgrade(k)
             | Confirm::SwitchAp(k, _)
             | Confirm::SetOption(k, ..)
-            | Confirm::Forget(k) => k.clone(),
+            | Confirm::Forget(k)
+            | Confirm::Restart(k)
+            | Confirm::Console(k, _) => k.clone(),
             Confirm::ForgetOffline => return self.forget_offline_dialog(ctx),
         };
         let Some(d) = self.store.devices.get(&key) else {
@@ -2114,6 +2372,20 @@ impl DerustApp {
                     ui.label(RichText::new(FORGET_BACK).weak());
                     "Remove"
                 }
+                Confirm::Restart(_) => {
+                    ui.heading(format!("Restart {}?", d.display_name()));
+                    ui.add_space(6.0);
+                    ui.label("The device restarts with its current settings (Restart 1) and is back in a few seconds.");
+                    "Restart"
+                }
+                Confirm::Console(_, line) => {
+                    ui.heading(format!("Send this to {}?", d.display_name()));
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(line).monospace().strong());
+                    ui.add_space(6.0);
+                    ui.colored_label(ORANGE, console::RISK_TEXT);
+                    "Send anyway"
+                }
                 Confirm::ForgetOffline => unreachable!("own dialog"),
             };
             ui.add_space(10.0);
@@ -2161,6 +2433,20 @@ impl DerustApp {
                         .collect(),
                     Some(Confirm::SetOption(k, n, v)) => self.set_option_actions(&k, n, v),
                     Some(Confirm::Forget(k)) => self.forget_actions(&k),
+                    Some(Confirm::Restart(k)) => self.store.command(&k, "RESTART", "1").into_iter().collect(),
+                    Some(Confirm::Console(k, line)) => {
+                        match self.console_send(&k, &line, true) {
+                            Ok(()) => {
+                                if let Some(w) = self.consoles.iter_mut().find(|w| w.key == k) {
+                                    w.input.clear();
+                                    w.hist_pos = None;
+                                    w.error = None;
+                                }
+                            }
+                            Err(e) => self.show_notice(&e),
+                        }
+                        Vec::new()
+                    }
                     Some(Confirm::ForgetOffline) | None => Vec::new(),
                 };
                 self.apply(actions);
@@ -2207,6 +2493,7 @@ impl eframe::App for DerustApp {
         self.tools_menu(&ctx);
         self.wifi_window(&ctx);
         self.backup_window(&ctx);
+        self.console_windows(&ctx);
 
         // Keeps the uptime columns ticking.
         ctx.request_repaint_after(Duration::from_secs(1));
@@ -2371,6 +2658,16 @@ fn device_cell(ui: &mut egui::Ui, d: &Device, actions: &mut Vec<UiAction>) {
         if r.clicked() {
             actions.push(UiAction::OpenTools(d.topic.clone(), r.rect.left_bottom()));
         }
+    } else {
+        // Keeps the console buttons in one column.
+        let h = ui.text_style_height(&egui::TextStyle::Body);
+        ui.allocate_exact_size(vec2(h, h), Sense::hover());
+    }
+    if console_button(ui)
+        .on_hover_text("Console: this device's MQTT messages, send commands")
+        .clicked()
+    {
+        actions.push(UiAction::OpenConsole(d.topic.clone()));
     }
     if d.reachable() == Some(false)
         && remove_button(ui)
@@ -3077,6 +3374,80 @@ fn gear_button(ui: &mut egui::Ui) -> egui::Response {
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+    resp
+}
+
+/// The five favourite commands, editable. `done`: Some(true) save, Some(false) cancel.
+fn favourites_editor(ui: &mut egui::Ui, favs: &mut [console::Favourite], done: &mut Option<bool>) {
+    ui.label("Favourite commands: a click puts one in the command line, ready to edit and send.");
+    ui.label(
+        RichText::new(
+            "Use Backlog for several commands. Parts like <password> must be replaced before \
+             sending. Saved as plain text on this computer: avoid real passwords here.",
+        )
+        .weak(),
+    );
+    egui::Grid::new("favourites-grid")
+        .num_columns(2)
+        .spacing([8.0, 6.0])
+        .show(ui, |ui| {
+            ui.label(RichText::new("Name").strong());
+            ui.label(RichText::new("Command").strong());
+            ui.end_row();
+            for f in favs.iter_mut() {
+                ui.add_sized([140.0, ui.spacing().interact_size.y], egui::TextEdit::singleline(&mut f.name));
+                ui.add(
+                    egui::TextEdit::singleline(&mut f.command)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(ui.available_width().max(360.0)),
+                );
+                ui.end_row();
+            }
+        });
+    ui.horizontal(|ui| {
+        if ui.button("Save").clicked() {
+            *done = Some(true);
+        }
+        if ui.button("Cancel").clicked() {
+            *done = Some(false);
+        }
+    });
+}
+
+/// Small console button: a ">_" prompt in a rounded square.
+fn console_button(ui: &mut egui::Ui) -> egui::Response {
+    let h = ui.text_style_height(&egui::TextStyle::Body);
+    let (rect, resp) = ui.allocate_exact_size(vec2(h, h), Sense::click());
+    let color = if resp.hovered() {
+        ui.visuals().hyperlink_color
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let r = rect.shrink(h * 0.08);
+    let s = Stroke::new(h * 0.09, color);
+    let p = ui.painter();
+    p.rect_stroke(r, h * 0.15, s, egui::StrokeKind::Inside);
+    let (l, t, w, hh) = (r.left(), r.top(), r.width(), r.height());
+    let at = |x: f32, y: f32| egui::pos2(l + w * x, t + hh * y);
+    p.line_segment([at(0.22, 0.3), at(0.42, 0.48)], s);
+    p.line_segment([at(0.42, 0.48), at(0.22, 0.66)], s);
+    p.line_segment([at(0.5, 0.68), at(0.78, 0.68)], s);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
+/// A button with a painted triangle, as tall as a text field (the default fonts have no arrows).
+fn history_button(ui: &mut egui::Ui, up: bool, enabled: bool) -> egui::Response {
+    let h = ui.spacing().interact_size.y;
+    let resp = ui.add_enabled(enabled, egui::Button::new("").min_size(vec2(h, h)));
+    let color = if enabled {
+        ui.visuals().text_color()
+    } else {
+        GRAY.gamma_multiply(0.4)
+    };
+    triangle(ui, resp.rect.shrink(h * 0.22), up, color);
     resp
 }
 

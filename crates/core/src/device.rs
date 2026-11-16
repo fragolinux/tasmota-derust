@@ -667,6 +667,8 @@ pub struct Store {
     pub ssids: [Option<String>; 2],
     /// Firmware image sizes, for the free flash check of the upgrade path.
     pub sizes: crate::ota::Sizes,
+    /// Recent MQTT messages of each device, for the console.
+    pub console: crate::console::Log,
 }
 
 impl Store {
@@ -738,6 +740,7 @@ impl Store {
             .ok()
             .filter(Value::is_object);
 
+        self.console.push(&key, false, retained, topic, payload);
         let Some(d) = self.devices.get_mut(&key) else {
             return out;
         };
@@ -797,6 +800,7 @@ impl Store {
             return None;
         }
         let d = self.devices.remove(key)?;
+        self.console.clear(key);
         Some(
             d.retained_topics
                 .into_iter()
@@ -921,6 +925,27 @@ impl Store {
             self.query(&k, &mut out);
         }
         out
+    }
+
+    /// Records the commands among `actions` in the console of the device they go to.
+    pub fn log_sent(&mut self, actions: &[Action]) {
+        for a in actions {
+            let Action::Publish { topic, payload } = a else {
+                continue;
+            };
+            let key = self
+                .devices
+                .iter()
+                .find(|(_, d)| {
+                    topic
+                        .strip_prefix(d.cmnd_prefix.as_str())
+                        .is_some_and(|c| !c.contains('/'))
+                })
+                .map(|(k, _)| k.clone());
+            if let Some(k) = key {
+                self.console.push(&k, true, false, topic, payload);
+            }
+        }
     }
 
     /// A state-changing command. None when the device is not online (offline, not answering

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
@@ -105,6 +105,7 @@ pub fn router(
         .route("/api/devices/{topic}/power/{n}", post(api_power))
         .route("/api/devices/{topic}/ap/{n}", post(api_ap))
         .route("/api/devices/{topic}/upgrade", post(api_upgrade))
+        .route("/api/devices/{topic}/restart", post(api_restart))
         .route("/api/devices/{topic}/channel/{channel}", post(api_channel))
         .route("/api/devices/{topic}/dimmer/{n}", post(api_dimmer))
         .route("/api/devices/{topic}/hsb/{h}/{s}/{b}", post(api_hsb))
@@ -114,6 +115,14 @@ pub fn router(
         .route("/api/devices/{topic}/wifi/{slot}", post(api_wifi))
         .route("/api/devices/{topic}/backup", post(api_backup))
         .route("/api/devices/{topic}/restore", post(api_restore))
+        .route(
+            "/api/devices/{topic}/console",
+            get(api_console).post(api_console_send),
+        )
+        .route(
+            "/api/console/favourites",
+            get(api_favourites).post(api_set_favourites),
+        )
         .route(
             "/api/devices/{topic}/option/{n}/{value}",
             post(api_set_option),
@@ -672,6 +681,10 @@ fn reply(st: &AppState, r: Result<(), CommandError>) -> Response {
             return (StatusCode::FORBIDDEN, msg).into_response();
         }
         Err(CommandError::UnknownDevice) => StatusCode::NOT_FOUND,
+        // The page asks, then sends again with "confirm": true.
+        Err(CommandError::Console(tasmota_derust_core::console::ConsoleError::NeedsConfirm)) => {
+            StatusCode::PRECONDITION_REQUIRED
+        }
         Err(
             CommandError::Offline
             | CommandError::UpgradeRunning
@@ -686,7 +699,8 @@ fn reply(st: &AppState, r: Result<(), CommandError>) -> Response {
             | CommandError::BadAp
             | CommandError::OptionBlocked
             | CommandError::BadOption
-            | CommandError::Wifi(_),
+            | CommandError::Wifi(_)
+            | CommandError::Console(_),
         ) => StatusCode::BAD_REQUEST,
     };
     (code, r.unwrap_err().message()).into_response()
@@ -751,6 +765,58 @@ async fn api_set_option(
     Path((topic, n, value)): Path<(String, u16, u32)>,
 ) -> Response {
     reply(&st, st.session.set_option(&topic, n, value))
+}
+
+#[derive(Deserialize)]
+struct After {
+    #[serde(default)]
+    after: u64,
+}
+
+/// A device's console: its messages after `?after=<seq>` and its command history.
+async fn api_console(
+    State(st): State<AppState>,
+    Path(topic): Path<String>,
+    Query(q): Query<After>,
+) -> Response {
+    match st.session.console(&topic, q.after) {
+        Some(v) => Json(v).into_response(),
+        None => (StatusCode::NOT_FOUND, CommandError::UnknownDevice.message()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct ConsoleBody {
+    line: String,
+    /// The user confirmed a command that can cut the device off (428 without it).
+    #[serde(default)]
+    confirm: bool,
+}
+
+/// Sends a line typed in the console (`Command payload`).
+async fn api_console_send(
+    State(st): State<AppState>,
+    Path(topic): Path<String>,
+    Json(body): Json<ConsoleBody>,
+) -> Response {
+    reply(&st, st.session.console_send(&topic, &body.line, body.confirm))
+}
+
+async fn api_favourites() -> Json<Vec<tasmota_derust_core::console::Favourite>> {
+    Json(tasmota_derust_core::console::favourites())
+}
+
+/// Saves the favourite commands (shared with the desktop app). Not in read-only mode: the
+/// file is shared by every program on this computer.
+async fn api_set_favourites(
+    State(st): State<AppState>,
+    Json(list): Json<Vec<tasmota_derust_core::console::Favourite>>,
+) -> Response {
+    if st.session.read_only() {
+        return reply(&st, Err(CommandError::ReadOnly));
+    }
+    tasmota_derust_core::console::set_favourites(list);
+    StatusCode::NO_CONTENT.into_response()
 }
 
 #[derive(Deserialize)]
@@ -854,6 +920,11 @@ async fn api_forget_offline(State(st): State<AppState>) -> Response {
         Ok(n) => Json(Removed { removed: n }).into_response(),
         Err(e) => reply(&st, Err(e)),
     }
+}
+
+/// `Restart 1`.
+async fn api_restart(State(st): State<AppState>, Path(topic): Path<String>) -> Response {
+    reply(&st, st.session.restart(&topic))
 }
 
 async fn api_upgrade(State(st): State<AppState>, Path(topic): Path<String>) -> Response {

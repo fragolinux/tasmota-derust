@@ -82,9 +82,9 @@ pub fn mask_passwords(payload: &str) -> String {
     let mut out = Vec::new();
     for part in payload.split(';') {
         let t = part.trim_start();
-        let lower = t.to_ascii_lowercase();
-        if lower.starts_with("password") {
-            let cmd: String = t.chars().take_while(|c| !c.is_whitespace()).collect();
+        let cmd: String = t.chars().take_while(|c| !c.is_whitespace()).collect();
+        // Password1/2, MqttPassword, WebPassword…
+        if cmd.to_ascii_lowercase().contains("password") {
             let lead = &part[..part.len() - t.len()];
             out.push(if t.len() > cmd.len() {
                 format!("{lead}{cmd} ****")

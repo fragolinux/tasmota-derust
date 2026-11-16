@@ -37,6 +37,7 @@ pub enum CommandError {
     BadOption,
     NotOffline,
     Wifi(tasmota_derust_core::wifi::WifiError),
+    Console(tasmota_derust_core::console::ConsoleError),
 }
 
 impl CommandError {
@@ -57,6 +58,7 @@ impl CommandError {
             CommandError::BadOption => E::BadOption,
             CommandError::NotOffline => E::NotOffline,
             CommandError::Wifi(w) => E::Wifi(*w),
+            CommandError::Console(c) => E::Console(*c),
         }
     }
 }
@@ -87,8 +89,80 @@ impl From<session::CommandError> for CommandError {
             E::BadOption => CommandError::BadOption,
             E::NotOffline => CommandError::NotOffline,
             E::Wifi(w) => CommandError::Wifi(w),
+            E::Console(c) => CommandError::Console(c),
         }
     }
+}
+
+/// One MQTT message to or from a device, for its console.
+#[derive(uniffi::Record)]
+pub struct ConsoleLine {
+    /// Ask for the lines after the last one seen.
+    pub seq: u64,
+    /// Local time, "HH:MM:SS".
+    pub time: String,
+    /// Sent by this app.
+    pub sent: bool,
+    /// Replayed by the broker, not sent by the device just now.
+    pub retained: bool,
+    pub topic: String,
+    pub payload: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct ConsoleView {
+    pub lines: Vec<ConsoleLine>,
+    /// Commands typed for this device, oldest first.
+    pub history: Vec<String>,
+}
+
+#[derive(uniffi::Record)]
+pub struct Favourite {
+    pub name: String,
+    pub command: String,
+}
+
+/// Where the console history and the favourites are saved (the app's files directory).
+/// Call once at start.
+#[uniffi::export]
+pub fn set_data_dir(path: String) {
+    tasmota_derust_core::console::set_dir(path.into());
+}
+
+/// The favourite console commands: always 5 slots, an empty command is an unused slot.
+#[uniffi::export]
+pub fn favourites() -> Vec<Favourite> {
+    tasmota_derust_core::console::favourites()
+        .into_iter()
+        .map(|f| Favourite {
+            name: f.name,
+            command: f.command,
+        })
+        .collect()
+}
+
+#[uniffi::export]
+pub fn set_favourites(list: Vec<Favourite>) {
+    tasmota_derust_core::console::set_favourites(
+        list.into_iter()
+            .map(|f| tasmota_derust_core::console::Favourite {
+                name: f.name,
+                command: f.command,
+            })
+            .collect(),
+    );
+}
+
+/// Why a console line must be confirmed (it can cut the device off), or null.
+#[uniffi::export]
+pub fn console_risk(line: String) -> Option<String> {
+    tasmota_derust_core::console::risk(&line).map(str::to_string)
+}
+
+/// Telemetry sent every TelePeriod (STATE, SENSOR): the console can hide it.
+#[uniffi::export]
+pub fn is_telemetry(topic: String) -> bool {
+    tasmota_derust_core::console::is_telemetry(&topic)
 }
 
 #[derive(uniffi::Record)]
@@ -339,6 +413,36 @@ impl Session {
     /// Read queries only; allowed in read-only mode.
     pub fn refresh(&self) {
         self.inner.refresh();
+    }
+
+    /// A device's console: its messages after `after` (0: all) and its command history.
+    pub fn console(&self, topic: String, after: u64) -> Option<ConsoleView> {
+        self.inner.console(&topic, after).map(|v| ConsoleView {
+            lines: v
+                .lines
+                .into_iter()
+                .map(|l| ConsoleLine {
+                    seq: l.seq,
+                    time: l.time,
+                    sent: l.sent,
+                    retained: l.retained,
+                    topic: l.topic,
+                    payload: l.payload,
+                })
+                .collect(),
+            history: v.history,
+        })
+    }
+
+    /// Sends a console line (`Command payload`) and adds it to the device's history.
+    /// Lines for which `console_risk` returns a text need `confirmed`.
+    pub fn console_send(&self, topic: String, line: String, confirmed: bool) -> Result<(), CommandError> {
+        Ok(self.inner.console_send(&topic, &line, confirmed)?)
+    }
+
+    /// `Restart 1`.
+    pub fn restart(&self, topic: String) -> Result<(), CommandError> {
+        Ok(self.inner.restart(&topic)?)
     }
 
     /// Toggles relay `n` (1-based).
