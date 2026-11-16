@@ -66,11 +66,11 @@ Every artifact lands in `dist/`, size-optimized:
 | Command | Output |
 |---|---|
 | `make mac-desktop` | `dist/mac/Tasmota Derust.app` (Apple Silicon) |
-| `make mac-web` | `dist/mac/tasmota-derust-web` |
+| `make mac-web` | `dist/mac/tasmota-derust-web`, `tasmota-derust-web-rw` |
 | `make win-desktop` | `dist/windows/tasmota-derust.exe` (x64) |
-| `make win-web` | `dist/windows/tasmota-derust-web.exe` |
+| `make win-web` | `dist/windows/tasmota-derust-web.exe`, `tasmota-derust-web-rw.exe` |
 | `make linux-desktop` | `dist/linux/tasmota-derust` (x64, glibc 2.31+) |
-| `make linux-web` | `dist/linux/tasmota-derust-web` |
+| `make linux-web` | `dist/linux/tasmota-derust-web`, `tasmota-derust-web-rw` |
 | `make apk` | `dist/android/tasmota-derust.apk` (arm64 + armv7) |
 
 Groups: `make mac`, `make windows`, `make linux`, `make desktop`, `make web`. `make` alone
@@ -78,7 +78,7 @@ builds everything and prints the sizes. Then:
 
 | Command | What it does |
 |---|---|
-| `make dist` | Windows executables + APK, then `dist/latest/` with fixed names (`tasmota-derust.exe`, `tasmota-derust-web.exe`, `tasmota-derust.apk`), refreshed by every local Windows or APK build too: copy the folder to another PC and it overwrites the old ones |
+| `make dist` | Windows executables + APK, then `dist/latest/` with fixed names (`tasmota-derust.exe`, `tasmota-derust-web.exe`, `tasmota-derust-web-rw.exe`, `tasmota-derust.apk`), refreshed by every local Windows or APK build too: copy the folder to another PC and it overwrites the old ones |
 | `make package` | Trivy scan, then release files of `dist/` in `dist/release/` (reports in `dist/security/`) |
 | `make release` | checks, version bump, build + scan, signed commit and tag, push (see [Releases](#releases-and-ci)) |
 | `make sizes` | sizes of what is in `dist/` |
@@ -104,7 +104,7 @@ didn't install cargo-auditable.
 ```
 # Desktop app and web server for the computer you are on (macOS, Windows or Linux)
 cargo auditable build --locked --profile dist -p tasmota-derust -p tasmota-derust-web
-#   -> target/dist/tasmota-derust[.exe], target/dist/tasmota-derust-web[.exe]
+#   -> target/dist/tasmota-derust[.exe], target/dist/tasmota-derust-web[.exe], tasmota-derust-web-rw[.exe]
 
 # macOS app bundle
 mkdir -p "dist/mac/Tasmota Derust.app/Contents/MacOS"
@@ -135,7 +135,7 @@ bash scripts/package.sh dist dist/release dist/security 0.1.0
 ```
 
 For day-to-day work: `cargo run --release` (desktop app), `cargo run --release -p
-tasmota-derust-web -- --read-only`, `cd android && ./gradlew installDebug` (APK on a connected
+tasmota-derust-web` (read-only; `--bin tasmota-derust-web-rw` to send commands), `cd android && ./gradlew installDebug` (APK on a connected
 phone or emulator), or *Run* in Android Studio.
 
 ## Security scan with Trivy
@@ -295,7 +295,7 @@ and the pinned GitHub Actions. Security reports: see [SECURITY.md](SECURITY.md).
 |---|---|
 | `crates/core` | Device model, MQTT, settings, `Session` (store + commands with the read-only guard), simulator and probe examples |
 | `crates/desktop` | Desktop app (egui), binary `tasmota-derust` |
-| `crates/web` | Web server (axum): library used by the desktop app, binary `tasmota-derust-web`, page `index.html` |
+| `crates/web` | Web server (axum): library used by the desktop app, binaries `tasmota-derust-web` (read-only) and `tasmota-derust-web-rw`, page `index.html` |
 | `crates/mobile` | Android library (UniFFI) |
 | `crates/uniffi-bindgen` | Build tool that generates the Kotlin bindings |
 | `android/` | Android app (Kotlin, Jetpack Compose) |

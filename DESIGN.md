@@ -18,8 +18,8 @@
 | MQTT     | `rumqttc` sync client on a background thread (TLS disabled for now) |
 | JSON     | `serde_json` (`Value`, tolerant parsing) |
 | HTTP     | `ureq` (latest Tasmota release from the GitHub API) |
-| Settings | JSON file in `directories::ProjectDirs` config dir (Android: app preferences) |
-| Web      | `axum` + one HTML page |
+| Settings | JSON file in `directories::ProjectDirs` config dir (Android: app preferences); web password as a PBKDF2 hash (`ring`) |
+| Web      | `axum` + one HTML page; optional HTTPS with `rustls` (*ring* provider) and a self-signed certificate from `rcgen` |
 | Android  | Kotlin + Jetpack Compose UI, Rust core through UniFFI (JNA), built with `cargo-ndk` |
 
 ## Modules
@@ -40,13 +40,17 @@ Front ends:
 
 - `crates/desktop` – desktop app (egui, OpenGL via glow); drives the device store itself. Its
   "Start web server" button runs `tasmota_derust_web::WebServer` on a background thread with
-  its own `Session` (a second MQTT connection). One Read-only checkbox (ticked at every start)
-  guards the app's own commands and, through `Session::set_read_only`, the web server's.
-- `crates/web` – web server (axum), a library (`router`, `WebServer`, `browser_url`) plus the
-  standalone binary. JSON API: `GET /api/state`, `POST /api/refresh`,
-  `POST /api/devices/{topic}/power/{n}`, `…/ap/{n}`, `…/upgrade`. The page is
+  its own `Session` (a second MQTT connection), read-only or read-write as chosen in the dialog
+  the button opens. The Read-only checkbox (ticked at every start) guards the app's own
+  commands only. Settings: theme, broker, web server (HTTPS, login).
+- `crates/web` – web server (axum), a library (`router`, `WebServer`, `browser_url`,
+  `standalone_main`, `tls`) plus two binaries: `tasmota-derust-web` (always read-only) and
+  `tasmota-derust-web-rw`. JSON API: `GET /api/state`, `POST /api/refresh`,
+  `POST /api/devices/{topic}/power/{n}`, `…/ap/{n}`, `…/upgrade`, … The page is
   `crates/web/index.html` (plain HTML/JS, embedded in the binary), polling every 2 s; below
-  760 px it switches to a phone layout. `--read-only` refuses every state-changing command.
+  760 px it switches to a phone layout. A `guard` middleware in front of every route checks
+  the Host (DNS rebinding), the Origin of state-changing requests (cross-site requests) and,
+  when set, the login. Why each check exists and what it does not cover: [SECURITY.md](SECURITY.md).
 - `crates/mobile` – UniFFI wrapper of `Session` for Kotlin. `android/` – the Android app:
   `MainViewModel` owns the session and polls it once a second; Gradle task `rustCore` runs
   cargo-ndk for arm64-v8a, armeabi-v7a and x86_64 and generates the bindings into `build/`.
@@ -63,6 +67,7 @@ When a device comes online the app sends `Status 0`, `Module`, and (until known)
 - tdmgr's advanced editors: rules, timers, switches, buttons, power settings.
 - Console per device with command history.
 - MQTT over TLS, multiple brokers/sites in one window.
-- Forget/remove stale devices (clear retained discovery/LWT).
-- Web: login/password, live push (SSE) instead of polling, Home Assistant add-on / Docker image.
+- Broker password in the system's secret store (DPAPI / Keychain / Secret Service) instead of
+  plain text, with a fallback for headless servers.
+- Web: live push (SSE) instead of polling, Home Assistant add-on / Docker image.
 - Installers, macOS notarization, Windows code signing.

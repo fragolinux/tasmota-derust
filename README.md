@@ -30,8 +30,10 @@ Derust does it for you, one confirmed step at a time:
   Tasmota will go through its minimal image first;
 - it follows every restart and checks the version, then offers the next step; if a step
   fails, upgrading again continues from wherever the device is;
-- devices older than 10.0 also stop at **16.0.0** once a newer release is out: it is the last
-  release that still migrates their settings (newer ones skip those steps);
+- devices older than 10.0, ESP8266 and ESP32 alike, also stop at **16.0.0** once a newer
+  release is out: it is the last release that still migrates their settings (newer ones skip
+  those steps). ESP32 devices get the 16.0.0 image of their own build or chip (`tasmota32c3`,
+  `tasmota32s3`…);
 - one device at a time, with read-only mode as the safety lock.
 
 <img src="docs/upgrade-path/img/s1-1-dialog.png" width="520" alt="The upgrade dialog for a device on 6.7.1: step 1 of the path, image, free flash check">
@@ -100,7 +102,8 @@ GitHub the first time you open a SetOptions window. Nothing about you or your de
   restarts.
 - **Upgrade path for old firmware** (ESP8266, [see it on a real device](docs/upgrade-path/README.md)): from 4.2.0 up, the official steps
   5.14.0 → 6.7.1 → 7.2.0 → 8.5.1 → 9.1 → latest, one confirmed step at a time (with a stop at
-  16.0.0 before any newer release, the last one that migrates settings older than 10.0). Before each
+  16.0.0 before any newer release, the last one that migrates settings older than 10.0; on
+  ESP32 too, from 9.1 up). Before each
   step the free flash is checked against the image size (Tasmota goes through its
   `-minimal` image by itself when needed), `.gz` images are used only from 8.2 on, and the
   version is verified after the restart. If a step fails, upgrading again continues from
@@ -134,12 +137,15 @@ GitHub the first time you open a SetOptions window. Nothing about you or your de
   the ⓘ pill next to the title on Android) says what the app is and opens the list of changes
   of that release, and of a newer one when it is out (checked every hour, no restart needed), with the download for the system in use
   next to the link to the release page.
-- **Light, dark or system theme**: in the About window on the desktop and on the web page, in
-  Settings on Android.
+- **Light, dark or system theme**: in Settings everywhere (desktop, web page, Android).
 - **Read-only mode**, on at every start: only read queries (`Status 0`, `Module`, `SSId1/2`)
   are sent, and relays, Wi-Fi switching and settings, SetOptions, restores and upgrades are
   refused (a backup is allowed: it changes nothing). Trying one says that
   read-only is on and where to turn it off.
+- **A web server you choose to unlock**: `tasmota-derust-web` is read-only,
+  `tasmota-derust-web-rw` sends commands, and the desktop app asks which mode every time.
+  Optional login (stored only as a hash), optional HTTPS with a self-signed certificate, and
+  requests from other web sites refused. Details in [SECURITY.md](SECURITY.md).
 
 ## Screenshots
 
@@ -172,7 +178,9 @@ Set the broker in **Settings** (host, port, user, password); the devices appear 
 report in. The toolbar has the views, *Show offline*, the column chooser, *Refresh*, the
 **Read-only** checkbox (ticked at every start) and **Start web server**.
 
-Settings are saved in plain text in the user's config directory:
+**Settings** has the theme, the broker and the web server (HTTPS, login). They are saved in
+the user's config directory; the broker password in plain text, the web password only as a
+hash (what is stored and why: [SECURITY.md](SECURITY.md#what-is-stored-where-and-how)):
 
 | System | Config file |
 |---|---|
@@ -188,21 +196,49 @@ On Linux the desktop app needs OpenGL and either X11 or Wayland (any desktop ses
 on phones, tablets and desktop browsers: tables on wide screens, and on phones a compact list
 with a bottom tab bar and a detail sheet per device.
 
+It comes as two programs, so the mode is a visible choice at every launch:
+
 ```
-tasmota-derust-web                          # listens on 0.0.0.0:8080
-tasmota-derust-web --listen 127.0.0.1:8099  # local only
-tasmota-derust-web --read-only              # look, but never switch, restart or upgrade
+tasmota-derust-web                          # read-only: look, never switch or upgrade
+tasmota-derust-web-rw                       # read-write: commands are sent to devices
+tasmota-derust-web --listen 127.0.0.1:8099  # local only (both take --listen)
+tasmota-derust-web-rw --https               # HTTPS on port 8443 (self-signed certificate)
 ```
 
-It prints the address to open from other devices (this computer's network address, e.g.
-`http://192.168.1.20:8080`). It reads the broker from the desktop app's config file;
-environment variables override it: `DERUST_MQTT_HOST`, `DERUST_MQTT_PORT`, `DERUST_MQTT_USER`,
-`DERUST_MQTT_PASSWORD`, plus `DERUST_LISTEN` and `DERUST_READ_ONLY=1`.
+Each prints the address to open from other devices (this computer's network address, e.g.
+`http://192.168.1.20:8080`), its mode and whether a login is required. Both read the broker
+and the web login from the desktop app's config file; environment variables override them:
+`DERUST_MQTT_HOST`, `DERUST_MQTT_PORT`, `DERUST_MQTT_USER`, `DERUST_MQTT_PASSWORD`,
+`DERUST_WEB_USER`, `DERUST_WEB_PASSWORD`, `DERUST_WEB_HTTPS` (1/0) and `DERUST_LISTEN`.
 
-The desktop app can run the same server: **Start web server** listens on port 8080, shows the
-address, and follows the app's Read-only checkbox, also when it changes while the server runs.
+The desktop app can run the same server: **Start web server** asks whether to start it
+read-only or read-write, listens on port 8080 (8443 with HTTPS) and shows the address and the
+mode. Its mode
+does not follow the app's Read-only checkbox: stop the server and start it again to change it.
 
-There is no login yet: run it only on a trusted network, or in read-only mode.
+**Login (optional).** Set a username and password in the desktop app's **Settings** (Web
+server): the browser asks for them on every visit. Only a salted hash of the password is saved,
+so it cannot be read back from the config file (type a new one to change it). The desktop app's server and the two
+programs read the same config file, so they always use the same login. Without one, anyone who
+can reach the port can use the page: starting read-write without a login shows a warning, in
+the app, on the console and as a red banner on the page. The reasons behind these choices,
+and what they do not cover, are in [SECURITY.md](SECURITY.md#the-web-server-choices-and-their-limits).
+
+**HTTPS (optional).** By default the server speaks plain HTTP, without TLS: the login and all
+traffic (Wi-Fi passwords sent to devices included) travel in clear text on the network. Tick
+**HTTPS** in the desktop app's Settings (or pass `--https`) to serve HTTPS on port 8443 with a
+self-signed certificate. It is made once, next to the config file (`web-cert.pem`,
+`web-key.pem`), and shared by the app and the two programs, so a browser exception keeps
+working. Browsers warn on the first visit because no authority signed it: accept it only if
+its SHA-256 fingerprint matches the one printed by the server (or shown when hovering the
+address in the desktop app). Delete both files to make a new certificate, e.g. after the
+computer's address changed.
+
+The server also refuses commands sent by other web sites through a visitor's browser (their
+`Origin` must be the server itself), and answers only to IP addresses and local names
+(`localhost`, `nas`, `pi.local`, `box.lan`, …), so a public domain pointed at it cannot reach
+it. Behind a reverse proxy with its own domain, list that name in `DERUST_ALLOWED_HOSTS`
+(comma-separated).
 
 ## Android app
 

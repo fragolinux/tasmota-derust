@@ -10,7 +10,7 @@ use egui::{Align, Align2, Color32, FontId, Layout, RichText, Sense, Stroke, vec2
 use egui_extras::{Column as TCol, TableBuilder};
 
 use tasmota_derust_core::columns::{Col, View};
-use tasmota_derust_core::config::{BrokerConfig, Config};
+use tasmota_derust_core::config::{BrokerConfig, Config, WebLogin};
 use tasmota_derust_core::device::{self, Action, Device, StartError, Store, UpgradePhase};
 use tasmota_derust_core::github::{self, Latest};
 use tasmota_derust_core::light;
@@ -31,7 +31,7 @@ const ORANGE: Color32 = Color32::from_rgb(0xf0, 0x8c, 0x1e);
 const GRAY: Color32 = Color32::from_rgb(0xb0, 0xb0, 0xb0);
 const ROW_HEIGHT: f32 = 26.0;
 const LOG_MAX: usize = 2000;
-const WEB_READ_ONLY_HINT: &str = "It can be turned off in the desktop app (Read-only checkbox).";
+const WEB_READ_ONLY_HINT: &str = "It was started read-only from the desktop app: stop it there and start it again as read-write.";
 const READ_ONLY_NOTICE: &str =
     "Read-only mode is on: nothing was sent. Untick Read-only in the toolbar to allow commands.";
 
@@ -138,6 +138,11 @@ pub struct DerustApp {
     app_latest: Arc<Mutex<Latest>>,
     settings_open: bool,
     draft: BrokerConfig,
+    /// Web login and HTTPS choice being edited in Settings.
+    login_draft: LoginDraft,
+    https_draft: bool,
+    /// "Start web server" asks whether to start it read-only or read-write.
+    web_ask: bool,
     confirm: Option<Confirm>,
     sort: Option<Col>,
     sort_desc: bool,
@@ -147,8 +152,8 @@ pub struct DerustApp {
     /// Built-in web server (same page as `tasmota-derust-web`), with its own MQTT session.
     web: Option<WebServer>,
     web_error: Option<String>,
-    /// Refuses every command that changes a device (relays, Wi-Fi switch, upgrade), here and
-    /// in the built-in web server. On at every start.
+    /// Refuses every command that changes a device (relays, Wi-Fi switch, upgrade) in this
+    /// window. On at every start. The web server has its own mode, chosen when it starts.
     read_only: bool,
     /// Short message shown at the bottom of the window, with the time it appeared.
     notice: Option<(String, Instant)>,
@@ -176,6 +181,9 @@ impl DerustApp {
         let mut app = Self {
             repaint: repaint(&ctx),
             draft: cfg.broker.clone(),
+            login_draft: LoginDraft::from(&cfg.web_login),
+            https_draft: cfg.web_https,
+            web_ask: false,
             cfg,
             store: Store::default(),
             mqtt: None,
@@ -311,21 +319,111 @@ impl DerustApp {
 
     // ------------------------------------------------------------- web server
 
-    fn start_web(&mut self) {
+    fn start_web(&mut self, read_only: bool) {
         self.web = None;
         self.web_error = None;
-        let listen = tasmota_derust_web::DEFAULT_LISTEN
-            .parse()
-            .expect("valid address");
-        match WebServer::start(&self.cfg.broker, listen, self.read_only, WEB_READ_ONLY_HINT) {
+        let https = self.cfg.web_https;
+        let listen = tasmota_derust_web::default_listen(https);
+        let login = &self.cfg.web_login;
+        match WebServer::start(
+            &self.cfg.broker,
+            login,
+            https,
+            listen,
+            read_only,
+            WEB_READ_ONLY_HINT,
+        ) {
             Ok(w) => {
-                let mode = if w.read_only() { " (read-only)" } else { "" };
-                self.push_log('*', &format!("web server on {}{mode}", w.url()), "");
+                let mode = if w.read_only() {
+                    "read-only"
+                } else {
+                    "read-write"
+                };
+                let login = if w.login() {
+                    "login required"
+                } else {
+                    "no login"
+                };
+                self.push_log(
+                    '*',
+                    &format!("web server on {} ({mode}, {login})", w.url()),
+                    "",
+                );
                 self.web = Some(w);
             }
             Err(e) => {
                 self.web_error = Some(format!("Cannot start the web server on {listen}: {e}"))
             }
+        }
+    }
+
+    /// Asks how to start the web server: read-only, or read-write (with the risk spelled
+    /// out when there is no login).
+    fn web_start_window(&mut self, ctx: &egui::Context) {
+        if !self.web_ask {
+            return;
+        }
+        let login = self.cfg.web_login.is_set();
+        let mut open = true;
+        let mut choice = None;
+        egui::Window::new("Start web server")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .default_width(420.0)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(
+                    "May web visitors send commands (relays, Wi-Fi, settings, restores, \
+                     upgrades)? The Read-only checkbox of this window does not change it.",
+                );
+                ui.add_space(6.0);
+                if login {
+                    ui.label(format!(
+                        "Visitors must log in as \"{}\" (set in Settings).",
+                        self.cfg.web_login.username
+                    ));
+                    let note = if self.cfg.web_https {
+                        "HTTPS with a self-signed certificate: browsers warn on the first visit."
+                    } else {
+                        "Plain HTTP (no TLS): the login and all traffic travel in clear text \
+                         on the network."
+                    };
+                    ui.label(RichText::new(note).small().weak());
+                } else {
+                    ui.colored_label(
+                        RED,
+                        RichText::new("Read-write without a login is a risk.").strong(),
+                    );
+                    ui.colored_label(RED, tasmota_derust_web::no_login_risk(self.cfg.web_https));
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Read-only").clicked() {
+                        choice = Some(true);
+                    }
+                    let rw = if login {
+                        RichText::new("Read-write")
+                    } else {
+                        RichText::new("Read-write, no login").color(RED)
+                    };
+                    if ui.button(rw).clicked() {
+                        choice = Some(false);
+                    }
+                    if !login && ui.button("Settings…").clicked() {
+                        self.draft = self.cfg.broker.clone();
+                        self.login_draft = LoginDraft::from(&self.cfg.web_login);
+                        self.https_draft = self.cfg.web_https;
+                        self.settings_open = true;
+                        self.web_ask = false;
+                    }
+                });
+            });
+        if let Some(read_only) = choice {
+            self.web_ask = false;
+            self.start_web(read_only);
+        } else if !open {
+            self.web_ask = false;
         }
     }
 
@@ -343,13 +441,11 @@ impl DerustApp {
             RichText::new("Read-only")
         };
         let r = ui.checkbox(&mut self.read_only, label).on_hover_text(
-            "When ticked, only read queries are sent: relays, Wi-Fi switching and upgrades are \
-             refused, here and in the web server. Ticked at every start.",
+            "When ticked, only read queries are sent from this window: relays, Wi-Fi switching \
+             and upgrades are refused. Ticked at every start. The web server's mode is chosen \
+             when it starts.",
         );
         if r.changed() {
-            if let Some(w) = &self.web {
-                w.set_read_only(self.read_only);
-            }
             let state = if self.read_only { "on" } else { "off" };
             self.push_log('*', &format!("read-only {state}"), "");
         }
@@ -389,25 +485,41 @@ impl DerustApp {
                 self.stop_web();
                 return;
             }
+            if !w.login() {
+                chip(ui, "no login", RED).on_hover_text(
+                    "Anyone on this network can open the page. Set a web login in Settings.",
+                );
+            }
             if read_only {
                 chip(ui, "read-only", ORANGE);
+            } else {
+                chip(ui, "read-write", RED)
+                    .on_hover_text("Web visitors can switch relays, change Wi-Fi and upgrade.");
             }
-            ui.hyperlink_to(&url, &url)
-                .on_hover_text("Open it from any phone or computer on this network");
+            let tip = match w.fingerprint() {
+                Some(f) => format!(
+                    "Open it from any phone or computer on this network.\n\nSelf-signed \
+                     certificate, SHA-256 fingerprint:\n{f}"
+                ),
+                None => "Open it from any phone or computer on this network.\n\nPlain HTTP: \
+                         traffic is not encrypted."
+                    .into(),
+            };
+            ui.hyperlink_to(&url, &url).on_hover_text(tip);
             ui.label("Web:");
         } else {
             let start = ui
                 .add_enabled(can_start, egui::Button::new("Start web server"))
                 .on_hover_text(
                     "Serve the web interface to phones and computers on this network. \
-                     The Read-only checkbox applies there too.",
+                     It asks whether web visitors may send commands.",
                 )
                 .on_disabled_hover_text("Configure the MQTT broker first");
             if let Some(e) = &self.web_error {
                 warn_icon(ui, RED).on_hover_text(e.as_str());
             }
             if start.clicked() {
-                self.start_web();
+                self.web_ask = true;
             }
         }
     }
@@ -1033,7 +1145,7 @@ impl DerustApp {
     }
 
     /// About: first the latest release (download + what changed, read here), then its release
-    /// page, what the app is, the theme and the project website.
+    /// page, what the app is and the project website.
     fn about_window(&mut self, ctx: &egui::Context) {
         if !self.about_open {
             self.about_notes = None;
@@ -1126,18 +1238,6 @@ impl DerustApp {
                     ui.label(p);
                     ui.add_space(4.0);
                 }
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Theme");
-                    let before = self.cfg.theme.clone();
-                    for (k, t) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-                        ui.selectable_value(&mut self.cfg.theme, k.to_string(), t);
-                    }
-                    if self.cfg.theme != before {
-                        ui.ctx().set_theme(theme_pref(&self.cfg.theme));
-                        self.cfg.save();
-                    }
-                });
                 ui.separator();
                 ui.hyperlink_to(
                     "Website: screenshots, guides, all downloads",
@@ -1270,6 +1370,8 @@ impl DerustApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.button("Settings").clicked() {
                     self.draft = self.cfg.broker.clone();
+                    self.login_draft = LoginDraft::from(&self.cfg.web_login);
+                    self.https_draft = self.cfg.web_https;
                     self.settings_open = true;
                 }
                 ui.separator();
@@ -1407,7 +1509,7 @@ impl DerustApp {
                 );
                 let me = ui
                     .link(concat!("About · v", env!("CARGO_PKG_VERSION")))
-                    .on_hover_text("What Tasmota Derust is, what changed in this version, theme");
+                    .on_hover_text("What Tasmota Derust is, what changed in this version");
                 if me.clicked() {
                     self.about_open = !self.about_open;
                 }
@@ -1644,12 +1746,27 @@ impl DerustApp {
         }
         let mut open = true;
         let mut connect = false;
-        egui::Window::new("MQTT broker")
+        egui::Window::new("Settings")
             .collapsible(false)
             .resizable(false)
             .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .open(&mut open)
             .show(ctx, |ui| {
+                // Applied and saved at once, unlike the broker below.
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Theme").strong());
+                    let before = self.cfg.theme.clone();
+                    for (k, t) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
+                        ui.selectable_value(&mut self.cfg.theme, k.to_string(), t);
+                    }
+                    if self.cfg.theme != before {
+                        ui.ctx().set_theme(theme_pref(&self.cfg.theme));
+                        self.cfg.save();
+                    }
+                });
+                ui.separator();
+                ui.label(RichText::new("MQTT broker").strong());
+                ui.add_space(4.0);
                 egui::Grid::new("broker")
                     .num_columns(2)
                     .spacing([12.0, 8.0])
@@ -1667,24 +1784,99 @@ impl DerustApp {
                         ui.add(egui::TextEdit::singleline(&mut self.draft.password).password(true));
                         ui.end_row();
                     });
+                ui.separator();
+                ui.label(RichText::new("Web server").strong());
+                ui.checkbox(
+                    &mut self.https_draft,
+                    "HTTPS (self-signed certificate, port 8443)",
+                )
+                .on_hover_text(
+                    "Encrypts the traffic. The certificate is made once and kept next to the \
+                     config file, shared with tasmota-derust-web and tasmota-derust-web-rw. \
+                     Browsers warn on the first visit, since no authority signed it: compare \
+                     the fingerprint shown in the toolbar before accepting.",
+                );
+                if !self.https_draft {
+                    ui.label(
+                        RichText::new("Plain HTTP on port 8080: no encryption.")
+                            .small()
+                            .weak(),
+                    );
+                }
                 ui.add_space(4.0);
+                ui.add_space(4.0);
+                let had_login = self.cfg.web_login.is_set();
+                ui.label(if had_login {
+                    format!("Login: set for \"{}\".", self.cfg.web_login.username)
+                } else {
+                    "Login: none.".to_string()
+                });
+                let d = &mut self.login_draft;
+                ui.add_enabled_ui(!d.remove, |ui| {
+                    egui::Grid::new("web_login")
+                        .num_columns(2)
+                        .spacing([12.0, 8.0])
+                        .show(ui, |ui| {
+                            ui.label("Username");
+                            ui.text_edit_singleline(&mut d.username);
+                            ui.end_row();
+                            ui.label(if had_login {
+                                "New password"
+                            } else {
+                                "Password"
+                            });
+                            ui.add(
+                                egui::TextEdit::singleline(&mut d.password)
+                                    .password(true)
+                                    .hint_text(if had_login { "unchanged" } else { "" }),
+                            );
+                            ui.end_row();
+                        });
+                });
+                if had_login {
+                    ui.checkbox(&mut d.remove, "Remove the login");
+                }
+                let problem = d.problem(had_login);
+                if let Some(p) = problem {
+                    ui.colored_label(RED, p);
+                }
                 ui.label(
-                    RichText::new("Saved in plain text in the app's config file.")
-                        .small()
-                        .weak(),
+                    RichText::new(
+                        "Asked by the browser for every visitor, also by tasmota-derust-web and \
+                         tasmota-derust-web-rw, which read this same config. Only a salted hash \
+                         of the password is saved, so it cannot be read back: type a new one to \
+                         change it. Without HTTPS it travels in clear text.",
+                    )
+                    .small()
+                    .weak(),
                 );
                 ui.add_space(4.0);
-                if ui.button("Save and connect").clicked() {
+                ui.label(
+                    RichText::new(
+                        "The broker password is saved in plain text in the app's config file \
+                         (it must be sent to the broker as is).",
+                    )
+                    .small()
+                    .weak(),
+                );
+                ui.add_space(4.0);
+                if ui
+                    .add_enabled(problem.is_none(), egui::Button::new("Save and connect"))
+                    .clicked()
+                {
                     connect = true;
                 }
             });
         if connect {
             self.cfg.broker = self.draft.clone();
+            self.cfg.web_login = self.login_draft.apply(&self.cfg.web_login);
+            self.login_draft = LoginDraft::from(&self.cfg.web_login);
+            self.cfg.web_https = self.https_draft;
             self.cfg.save();
             self.connect(ctx);
-            if self.web.is_some() {
-                // Follow the new broker settings.
-                self.start_web();
+            if let Some(read_only) = self.web.as_ref().map(|w| w.read_only()) {
+                // Follow the new broker and login, in the same mode.
+                self.start_web(read_only);
             }
             self.settings_open = false;
         } else if !open {
@@ -1971,6 +2163,7 @@ impl eframe::App for DerustApp {
         self.handle_actions(actions);
 
         self.settings_window(&ctx);
+        self.web_start_window(&ctx);
         self.confirm_dialog(&ctx);
         self.notice_overlay(&ctx);
         self.about_window(&ctx);
@@ -2834,5 +3027,55 @@ fn toggle(on: &mut bool) -> impl egui::Widget + '_ {
             );
         }
         response
+    }
+}
+
+/// The web login as edited in Settings. The stored password cannot be shown (only its
+/// hash is kept): an empty password field keeps it.
+#[derive(Default)]
+struct LoginDraft {
+    username: String,
+    password: String,
+    remove: bool,
+}
+
+impl From<&WebLogin> for LoginDraft {
+    fn from(l: &WebLogin) -> Self {
+        LoginDraft {
+            username: l.username.clone(),
+            ..Default::default()
+        }
+    }
+}
+
+impl LoginDraft {
+    /// Why it cannot be saved as it is.
+    fn problem(&self, had_login: bool) -> Option<&'static str> {
+        let (user, pass) = (self.username.trim(), &self.password);
+        match () {
+            _ if self.remove => None,
+            _ if user.is_empty() && !pass.is_empty() => Some("Type a username too."),
+            _ if user.is_empty() && had_login => {
+                Some("Tick \"Remove the login\" to turn the login off.")
+            }
+            _ if !user.is_empty() && pass.is_empty() && !had_login => {
+                Some("Type a password too, or clear the username.")
+            }
+            _ => None,
+        }
+    }
+
+    /// The login to save, from the current one and this draft.
+    fn apply(&self, current: &WebLogin) -> WebLogin {
+        let user = self.username.trim();
+        if self.remove || user.is_empty() {
+            WebLogin::default()
+        } else if !self.password.is_empty() {
+            WebLogin::new(user, &self.password)
+        } else {
+            let mut l = current.clone();
+            l.username = user.into();
+            l
+        }
     }
 }

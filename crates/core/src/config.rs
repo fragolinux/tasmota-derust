@@ -27,6 +27,118 @@ impl Default for BrokerConfig {
     }
 }
 
+/// Login of the web interface (HTTP Basic). Shared by the desktop app's built-in server
+/// and the standalone `tasmota-derust-web` programs, which read the same config file.
+///
+/// The password is never stored: only a salted PBKDF2-HMAC-SHA256 hash
+/// (`pbkdf2-sha256$<iterations>$<salt hex>$<hash hex>`), enough to check a login and useless
+/// to log in elsewhere. Off while the username or the hash is empty.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebLogin {
+    pub username: String,
+    pub password_hash: String,
+    /// A plain password in an older config file: read once, hashed by [`Config::load`],
+    /// never written back.
+    #[serde(skip_serializing)]
+    password: String,
+}
+
+/// PBKDF2 rounds: slow enough to make guessing a stolen hash expensive, fast enough for
+/// one check per browser session (the web server remembers logins it has checked).
+const PBKDF2_ROUNDS: u32 = 100_000;
+
+impl WebLogin {
+    /// A login for `username` with `password` hashed under a fresh random salt.
+    pub fn new(username: &str, password: &str) -> WebLogin {
+        use ring::rand::SecureRandom;
+        let mut salt = [0u8; 16];
+        ring::rand::SystemRandom::new()
+            .fill(&mut salt)
+            .expect("system random generator");
+        let mut hash = [0u8; 32];
+        ring::pbkdf2::derive(
+            ring::pbkdf2::PBKDF2_HMAC_SHA256,
+            std::num::NonZeroU32::new(PBKDF2_ROUNDS).expect("non-zero"),
+            &salt,
+            password.as_bytes(),
+            &mut hash,
+        );
+        WebLogin {
+            username: username.into(),
+            password_hash: format!(
+                "pbkdf2-sha256${PBKDF2_ROUNDS}${}${}",
+                hex(&salt),
+                hex(&hash)
+            ),
+            password: String::new(),
+        }
+    }
+
+    pub fn is_set(&self) -> bool {
+        !self.username.is_empty() && !self.password_hash.is_empty()
+    }
+
+    /// Whether `username` / `password` match (the comparison takes the same time
+    /// wherever the first difference is).
+    pub fn verify(&self, username: &str, password: &str) -> bool {
+        let mut parts = self.password_hash.split('$');
+        let (Some("pbkdf2-sha256"), Some(rounds), Some(salt), Some(hash), None) = (
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+        ) else {
+            return false;
+        };
+        let (Some(rounds), Some(salt), Some(hash)) = (
+            rounds.parse().ok().and_then(std::num::NonZeroU32::new),
+            unhex(salt),
+            unhex(hash),
+        ) else {
+            return false;
+        };
+        let pw_ok = ring::pbkdf2::verify(
+            ring::pbkdf2::PBKDF2_HMAC_SHA256,
+            rounds,
+            &salt,
+            password.as_bytes(),
+            &hash,
+        )
+        .is_ok();
+        // Same time wherever the first difference is (the length may show).
+        let (a, b) = (username.as_bytes(), self.username.as_bytes());
+        let user_ok =
+            a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0;
+        pw_ok && user_ok && self.is_set()
+    }
+
+    /// Hashes a plain password left by an older version. True when something changed.
+    fn migrate(&mut self) -> bool {
+        if self.password.is_empty() {
+            return false;
+        }
+        let plain = std::mem::take(&mut self.password);
+        *self = WebLogin::new(&self.username, &plain);
+        true
+    }
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ColumnSetting {
     pub col: Col,
@@ -42,6 +154,9 @@ pub struct Config {
     pub columns: BTreeMap<View, Vec<ColumnSetting>>,
     /// Desktop app colours: "system", "light" or "dark".
     pub theme: String,
+    pub web_login: WebLogin,
+    /// Serve the web interface over HTTPS (self-signed certificate, port 8443).
+    pub web_https: bool,
 }
 
 impl Default for Config {
@@ -52,6 +167,8 @@ impl Default for Config {
             view: View::Home,
             columns: BTreeMap::new(),
             theme: "system".into(),
+            web_login: WebLogin::default(),
+            web_https: false,
         };
         c.normalize();
         c
@@ -59,9 +176,13 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The app's config directory, shared by the desktop app and the web servers.
+    pub fn dir() -> Option<PathBuf> {
+        directories::ProjectDirs::from("", "", "tasmota-derust").map(|d| d.config_dir().into())
+    }
+
     fn path() -> Option<PathBuf> {
-        directories::ProjectDirs::from("", "", "tasmota-derust")
-            .map(|d| d.config_dir().join("config.json"))
+        Self::dir().map(|d| d.join("config.json"))
     }
 
     pub fn load() -> Self {
@@ -70,6 +191,10 @@ impl Config {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         cfg.normalize();
+        if cfg.web_login.migrate() {
+            // Drop the plain password from the file right away.
+            cfg.save();
+        }
         cfg
     }
 
@@ -139,6 +264,29 @@ fn default_columns(view: View) -> Vec<ColumnSetting> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn web_login_is_hashed_and_checked() {
+        let l = WebLogin::new("me", "sécret pw");
+        assert!(l.is_set());
+        assert!(!l.password_hash.contains("sécret"));
+        assert!(l.verify("me", "sécret pw"));
+        assert!(!l.verify("me", "secret pw"));
+        assert!(!l.verify("you", "sécret pw"));
+        // A new salt every time.
+        assert_ne!(
+            l.password_hash,
+            WebLogin::new("me", "sécret pw").password_hash
+        );
+        assert!(!WebLogin::default().verify("", ""));
+        // Never written in plain text, even from an old file.
+        let mut old: WebLogin =
+            serde_json::from_str(r#"{"username":"me","password":"pw"}"#).unwrap();
+        assert!(old.migrate());
+        assert!(old.verify("me", "pw"));
+        let json = serde_json::to_string(&old).unwrap();
+        assert!(!json.contains("\"password\""), "{json}");
+    }
+
     use super::*;
 
     fn firmware(cols: &[Col]) -> Config {

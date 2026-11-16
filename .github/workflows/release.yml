@@ -113,10 +113,12 @@ jobs:
             -p tasmota-derust -p tasmota-derust-web
           mkdir -p dist/windows
           cp target/x86_64-pc-windows-msvc/dist/tasmota-derust.exe \
-             target/x86_64-pc-windows-msvc/dist/tasmota-derust-web.exe dist/windows/
+             target/x86_64-pc-windows-msvc/dist/tasmota-derust-web.exe \
+             target/x86_64-pc-windows-msvc/dist/tasmota-derust-web-rw.exe dist/windows/
       - name: Smoke test (web server)
         run: |
           dist/windows/tasmota-derust-web.exe --help
+          dist/windows/tasmota-derust-web-rw.exe --help
           # Static C runtime: no Visual C++ Redistributable DLL may be imported.
           if grep -qai 'vcruntime1[0-9]*\.dll' dist/windows/*.exe; then
             echo "::error::The executables import the Visual C++ runtime (static CRT not applied)."
@@ -161,7 +163,7 @@ jobs:
       - name: Smoke test (Linux web server)
         run: |
           DERUST_MQTT_HOST=127.0.0.1 DERUST_MQTT_PORT=1 \
-            dist/linux/tasmota-derust-web --listen 127.0.0.1:8099 --read-only &
+            dist/linux/tasmota-derust-web --listen 127.0.0.1:8099 &
           pid=$!
           for _ in $(seq 20); do curl -fs http://127.0.0.1:8099/api/state > state.json && break; sleep 0.5; done
           grep -q '"read_only":true' state.json

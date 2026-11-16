@@ -23,7 +23,8 @@ The name says it: TDM, "de-rusted" and rebuilt in Rust. It is free and open sour
 One principle shaped it from day one: **it must never surprise you on your real devices.**
 Every front end starts in **read-only mode** at every launch. In that mode it only sends
 harmless status queries; relays, Wi-Fi changes, settings and upgrades are refused until you
-explicitly allow commands. Firmware upgrades always go one device at a time, never in bulk.
+explicitly allow commands. The web server is read-only unless you deliberately start the
+read-write one. Firmware upgrades always go one device at a time, never in bulk.
 
 ## How it grew, release by release
 
@@ -108,14 +109,49 @@ every state and the full log.
 - Release notes now include the right download for the system you're on (Windows zip, macOS
   dmg, Linux archive, Android APK).
 
-### Next release: a friendlier face
+### 0.6.0: a friendlier face
 
 - A proper **app icon** everywhere (a house with a power symbol), including Android's adaptive
   and themed icons, instead of the generic default.
 - An **About** box on every platform, opened from the version number (now clearly styled as
   something to tap): what the app is, what changed, where the source is.
-- **Light, dark or system theme**, chosen in Settings on Android and in the About box on the
-  desktop and web.
+- **Light, dark or system theme** (in 0.6.0 it sat in the About box on desktop and web; it
+  has since moved to Settings everywhere).
+
+### 0.7.0 and 0.7.1: tidying up
+
+- **Remove offline devices** from the list, one or all at once, together with the messages the
+  broker keeps for them; a device that comes back shows up again by itself.
+- Version checks repeat every hour, so a long-running app or server notices new releases.
+- About opens on the latest release (download for your system and what changed), and the
+  project got a **website** with screenshots and downloads.
+
+### Next release: a safer web server, and ESP32 upgrades
+
+Prompted by a security report
+([issue #1](https://github.com/fragolinux/tasmota-derust/issues/1)): the standalone web
+server started writable, listened on the whole network without a login, and any web page
+opened on that network could have sent it commands through a visitor's browser.
+
+- **Two web programs**: `tasmota-derust-web` is always read-only, `tasmota-derust-web-rw`
+  always sends commands. Which one you run is the choice.
+- The desktop app's **Start web server** asks every time: read-only or read-write. It no
+  longer follows the app's Read-only checkbox.
+- Requests from other web sites are refused, and so are public domain names pointed at the
+  server (DNS rebinding).
+- **Optional login**, shared by the desktop app's server and both programs; only a salted hash
+  of the password is stored.
+- **Optional HTTPS** on port 8443, with a self-signed certificate made once and shared; its
+  fingerprint is shown so you can check it.
+- Read-write without a login still works, but the app, the console and a red banner on the page
+  spell out the risk, and that plain HTTP sends everything in clear text.
+- **Settings** now hold everything you set: theme, broker, web server. The web page got its
+  own Settings button.
+- Every choice, its reason and its limits: [SECURITY.md](../SECURITY.md#the-web-server-choices-and-their-limits).
+- The **16.0.0 stop now covers ESP32 devices too** (from 9.1 up), with the 16.0.0 image of
+  their own build or chip. The settings steps Tasmota dropped are shared by every chip, and one
+  of them (9.5.0.2) fixes the ESP32-C3 settings layout: our own report to the Tasmota
+  developers listed it, but the app only stopped ESP8266 devices.
 
 ## What each version does today
 
@@ -135,23 +171,29 @@ decoding and safety rules are identical everywhere.
   progress for the device being upgraded.
 - **MQTT message log** with a filter, for troubleshooting.
 - A built-in **web server** you can start from the desktop app, so phones on the same network
-  get the web version without a separate install.
-- Read-only checkbox (ticked at every start), broker settings, About window with theme choice,
-  notice and download link when a newer version is out.
+  get the web version without a separate install; it asks whether to start it read-only or
+  read-write.
+- Read-only checkbox (ticked at every start), Settings (theme, broker, web server HTTPS and
+  login), About window, notice and download link when a newer version is out.
 - Single native executable; macOS as a regular `.app` in a `.dmg`, Windows as a plain `.exe`.
 
 ### Web version (any browser, desktop or phone)
 
-- A standalone server (`tasmota-derust-web`) for macOS, Windows and Linux, or the one built
-  into the desktop app. Nothing to install on the devices that open it.
+- A standalone server for macOS, Windows and Linux in two programs, `tasmota-derust-web`
+  (read-only) and `tasmota-derust-web-rw` (commands allowed), or the one built into the desktop
+  app. Nothing to install on the devices that open it.
 - On a computer: the same table, views, column chooser and search as the desktop app.
 - On a phone: a layout of its own, with compact rows, a bottom navigation bar for the five
   views, and a bottom sheet with everything about a device and its actions (relays, lights,
   SetOptions, Wi-Fi networks, backup / restore, upgrade).
 - Backups download through the browser and restores upload from it.
-- Light / dark / system theme remembered per browser; release notes with the download for the
-  visitor's own system.
-- The server can be started read-only, so it can be shared with others safely.
+- A Settings button (a gear on phones): light / dark / system theme remembered per browser,
+  and what the server uses (broker, read-only, login, HTTPS). Release notes with the download
+  for the visitor's own system.
+- Optional login (stored only as a hash) and optional HTTPS on port 8443 with a self-signed
+  certificate, both shared with the desktop app's server. Requests from other web sites and
+  rebound domain names are refused. A red banner warns when commands are allowed without a
+  login.
 
 ### Android app (Android 13+)
 
@@ -176,3 +218,5 @@ decoding and safety rules are identical everywhere.
   for SetOption descriptions. Nothing about you or your devices is sent anywhere.
 - **Releases**: built and published by CI from signed tags, each archive with its licenses,
   vulnerability report and checksums.
+- **Security**: the web server's protections, what is stored where (and what is in plain
+  text), and what is not covered are written down in [SECURITY.md](../SECURITY.md).

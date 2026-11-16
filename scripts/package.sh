@@ -74,15 +74,18 @@ add() { # add <kind> <release file name> <files...>
 app="$dist/mac/Tasmota Derust.app"
 [ -d "$app" ] && add dmg "tasmota-derust-$version-macos-arm64.dmg" "$app"
 [ -f "$dist/mac/tasmota-derust-web" ] &&
-    add zip "tasmota-derust-web-$version-macos-arm64.zip" "$dist/mac/tasmota-derust-web"
+    add zip "tasmota-derust-web-$version-macos-arm64.zip" "$dist/mac/tasmota-derust-web" \
+        "$dist/mac/tasmota-derust-web-rw"
 [ -f "$dist/windows/tasmota-derust.exe" ] &&
     add zip "tasmota-derust-$version-windows-x64.zip" "$dist/windows/tasmota-derust.exe"
 [ -f "$dist/windows/tasmota-derust-web.exe" ] &&
-    add zip "tasmota-derust-web-$version-windows-x64.zip" "$dist/windows/tasmota-derust-web.exe"
+    add zip "tasmota-derust-web-$version-windows-x64.zip" "$dist/windows/tasmota-derust-web.exe" \
+        "$dist/windows/tasmota-derust-web-rw.exe"
 [ -f "$dist/linux/tasmota-derust" ] &&
     add tgz "tasmota-derust-$version-linux-x64.tar.gz" "$dist/linux/tasmota-derust"
 [ -f "$dist/linux/tasmota-derust-web" ] &&
-    add tgz "tasmota-derust-web-$version-linux-x64.tar.gz" "$dist/linux/tasmota-derust-web"
+    add tgz "tasmota-derust-web-$version-linux-x64.tar.gz" "$dist/linux/tasmota-derust-web" \
+        "$dist/linux/tasmota-derust-web-rw"
 
 apk="$dist/android/tasmota-derust.apk"
 apk_name="tasmota-derust-$version.apk"

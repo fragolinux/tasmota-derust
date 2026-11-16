@@ -98,7 +98,7 @@ mac-desktop:
 mac-web:
 	$(CARGO_BUILD) -p tasmota-derust-web
 	@mkdir -p $(MAC_DIR)
-	cp target/dist/tasmota-derust-web $(MAC_DIR)/
+	cp target/dist/tasmota-derust-web target/dist/tasmota-derust-web-rw $(MAC_DIR)/
 
 # ----------------------------------------------------------------------- Windows
 
@@ -111,8 +111,8 @@ win-desktop:
 win-web:
 	$(CARGO_BUILD) --target $(WIN_TARGET) -p tasmota-derust-web
 	@mkdir -p $(WIN_DIR)
-	cp target/$(WIN_TARGET)/dist/tasmota-derust-web.exe $(WIN_DIR)/
-	@mkdir -p $(LATEST_DIR) && cp -p $(WIN_DIR)/tasmota-derust-web.exe $(LATEST_DIR)/
+	cp target/$(WIN_TARGET)/dist/tasmota-derust-web.exe target/$(WIN_TARGET)/dist/tasmota-derust-web-rw.exe $(WIN_DIR)/
+	@mkdir -p $(LATEST_DIR) && cp -p $(WIN_DIR)/tasmota-derust-web.exe $(WIN_DIR)/tasmota-derust-web-rw.exe $(LATEST_DIR)/
 
 # ------------------------------------------------------------------------- Linux
 # Cross-compiled with cargo-zigbuild (zig as the linker), also on Linux hosts, so the
@@ -126,7 +126,7 @@ linux-desktop:
 linux-web:
 	$(CARGO) $(AUDITABLE) zigbuild --locked --profile dist --target $(LINUX_TARGET).$(LINUX_GLIBC) -p tasmota-derust-web
 	@mkdir -p $(LINUX_DIR)
-	cp target/$(LINUX_TARGET)/dist/tasmota-derust-web $(LINUX_DIR)/
+	cp target/$(LINUX_TARGET)/dist/tasmota-derust-web target/$(LINUX_TARGET)/dist/tasmota-derust-web-rw $(LINUX_DIR)/
 
 # ----------------------------------------------------------------------- Android
 

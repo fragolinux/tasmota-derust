@@ -67,6 +67,7 @@ details.menu > summary::-webkit-details-marker { display: none; }
 
 .banner { margin: 10px 16px 0; padding: 8px 12px; border-radius: var(--radius); background: var(--panel-2);
   border-left: 4px solid var(--orange); }
+.banner.risk { background: var(--red); color: #fff; font-weight: 600; }
 main { padding: 12px 16px 40px; }
 .empty { color: var(--muted); text-align: center; padding: 48px 0; }
 
@@ -122,8 +123,8 @@ button.ap { cursor: pointer; }
 .about p { margin: 0 0 10px; }
 .about .about-head { font-weight: 700; }
 .about hr { border: 0; border-top: 1px solid var(--border, #8884); margin: 12px 0; }
-.about .theme-row { display: flex; gap: 6px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
-.about .theme-row .btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.theme-row { display: flex; gap: 6px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+.theme-row .btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .changes h4 { margin: 10px 0 4px; } .changes ul { margin: 0; padding-left: 20px; }
 .up-done { color: var(--green); } .up-failed { color: var(--red); } .up-note { color: var(--muted); }
 .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--muted); border-top-color: transparent;
@@ -267,6 +268,11 @@ dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding
   html, body { font-size: 15px; }
   header { padding: 6px 12px 8px; padding-top: max(6px, env(safe-area-inset-top)); }
   .brand { font-size: 17px; margin-right: 2px; }
+  /* One line: the connection text shrinks so Refresh and Settings stay beside it. */
+  header > .row:first-child { flex-wrap: nowrap; gap: 6px; }
+  header .conn { min-width: 0; flex: 0 1 auto; }
+  #connText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header .icon-btn { flex: none; padding: 4px; }
   main { padding: 0 8px calc(72px + env(safe-area-inset-bottom)); }
   .empty { padding: 64px 0; }
   #toast { bottom: calc(72px + env(safe-area-inset-bottom)); }
@@ -284,6 +290,9 @@ dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding
     <button class="icon-btn m-only" id="mRefresh" title="Ask every online device for its full status" aria-label="Refresh">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
     </button>
+    <button class="icon-btn m-only" id="mSettings" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
   </div>
   <div class="mtools m-only">
     <input type="search" id="msearch" placeholder="Search" autocomplete="off" enterkeyhint="search">
@@ -300,11 +309,12 @@ dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding
       <div class="menu-body" id="colsBody"></div>
     </details>
     <button class="btn" id="refresh" title="Ask every online device for its full status">Refresh</button>
+    <button class="btn" id="settings" title="Theme, MQTT broker, read-only mode, login, HTTPS">Settings</button>
     <span class="spacer"></span>
     <span class="info" id="counts"></span>
   </div>
 </header>
-<div id="banner" class="d-only"></div>
+<div id="banner"></div>
 <main id="main"><div class="empty">Loading…</div></main>
 <nav class="bnav m-only" id="bnav"></nav>
 <dialog id="sheet" class="sheet"><div class="sheet-inner" id="sheetBody"></div></dialog>
@@ -617,11 +627,12 @@ function render() {
   const offline = data.devices.filter(d => d.online === false).length;
   const upd = data.app_update
     ? ` <a class="app-update" href="#" data-changelog="${esc(data.app_update)}" title="A newer Tasmota Derust is published: see what changed">v${esc(data.app_update)} available</a>` : "";
-  const me = `<a class="app-ver" href="#" data-about="1" title="About Tasmota Derust, what changed in this version, theme">${svg(INFO_ICON)}v${esc(data.app_version)}</a>`;
+  const me = `<a class="app-ver" href="#" data-about="1" title="About Tasmota Derust, what changed in this version">${svg(INFO_ICON)}v${esc(data.app_version)}</a>`;
   $("counts").innerHTML = `${data.devices.length} devices · ${online} online · ${offline} offline · ${me}${upd}`;
   $("mver").innerHTML = `${me}${upd}`;
   $("banner").innerHTML = data.read_only
-    ? `<div class="banner">Read-only mode: you can look, but relays, Wi-Fi switching and upgrades are disabled. ${esc(data.read_only_hint || "")}</div>` : "";
+    ? `<div class="banner d-only">Read-only mode: you can look, but relays, Wi-Fi switching and upgrades are disabled. ${esc(data.read_only_hint || "")}</div>`
+    : !data.login ? `<div class="banner risk">${NO_LOGIN_RISK}${data.https ? "" : NO_TLS}</div>` : "";
 
   // Per-view info
   let info = "";
@@ -978,26 +989,52 @@ function applyTheme(t) {
 }
 applyTheme(store.get("theme", "system"));
 
-// About: first the latest release (download + what changed, read here), then its release
-// page, what the app is, the theme and the project website.
-async function showAbout() {
-  const theme = () => `<div class="theme-row">Theme ${Object.entries(THEMES).map(([k, t]) =>
-    `<button class="btn${store.get("theme", "system") === k ? " on" : ""}" data-theme-set="${k}">${t}</button>`).join("")}</div>`;
-  const latest = data.app_latest, mine = data.app_version, target = latest || mine;
-  const newer = latest && latest !== mine;
-  const head = newer ? `<p class="about-head warn-text">Version ${esc(latest)} is available</p>`
-    : latest ? `<p class="about-head">You have the latest version</p>` : `<p class="about-head">This version</p>`;
-  const body = `<div class="about">${head}<div id="aboutNotes"><p style="color:var(--muted)">Loading what changed…</p></div>
-    <hr>${$("aboutTpl").innerHTML}${theme()}
-    <p><a href="@SITE@" target="_blank" rel="noopener">Website: screenshots, guides, all downloads</a></p></div>`;
+const NO_LOGIN_RISK = "Commands are allowed and there is no login: anyone on this network can open this page, " +
+  "switch relays, change Wi-Fi settings and start upgrades. A login is set in the desktop app's Settings, or with " +
+  "DERUST_WEB_USER and DERUST_WEB_PASSWORD.";
+const NO_TLS = " All traffic is plain HTTP without TLS, readable by anyone on the network.";
+
+// Settings: the theme (this browser's), and the broker and read-only mode, which are the
+// server's and only shown here.
+async function showSettings() {
+  const theme = `<div class="theme-row"><b>Theme</b> ${Object.entries(THEMES).map(([k, t]) =>
+    `<button class="btn${store.get("theme", "system") === k ? " on" : ""}" data-theme-set="${k}">${t}</button>`).join("")}</div>
+    <p style="color:var(--muted)">Remembered by this browser.</p>`;
+  const broker = data
+    ? `<p><b>MQTT broker</b><br>${data.connected ? `Connected to ${esc(data.broker)}` : `Disconnected: ${esc(data.status)}`}</p>
+       <p style="color:var(--muted)">Set where the server runs: in the desktop app's Settings, or with the
+       DERUST_MQTT_HOST, DERUST_MQTT_PORT, DERUST_MQTT_USER and DERUST_MQTT_PASSWORD variables.</p>
+       <p><b>Read-only</b><br>${data.read_only ? `On: relays, Wi-Fi switching and upgrades are disabled. ${esc(data.read_only_hint || "")}`
+         : "Off: commands are sent to the devices."}</p>
+       <p><b>Login</b><br>${data.login ? "Required for every visitor." : "None: anyone on this network can open this page."}</p>
+       <p style="color:var(--muted)">Set where the server runs: in the desktop app's Settings (Web server login), or with
+       DERUST_WEB_USER and DERUST_WEB_PASSWORD.</p>
+       <p><b>Connection</b><br>${data.https ? "HTTPS (self-signed certificate): encrypted."
+         : "Plain HTTP without TLS: the login and all traffic travel in clear text on the network."}</p>
+       <p style="color:var(--muted)">HTTPS is turned on in the desktop app's Settings, or with --https
+       (DERUST_WEB_HTTPS=1).</p>` : "";
   const dlg = $("dlg");
-  const closed = confirmDialog(`Tasmota Derust ${mine}`, body, "Close", true);
+  const closed = confirmDialog("Settings", `<div class="about">${theme}<hr>${broker}</div>`, "Close", true);
   dlg.onclick = e => {
     const b = e.target.closest("[data-theme-set]");
     if (!b) return;
     store.set("theme", b.dataset.themeSet); applyTheme(b.dataset.themeSet);
     dlg.querySelectorAll("[data-theme-set]").forEach(x => x.classList.toggle("on", x === b));
   };
+  await closed;
+}
+
+// About: first the latest release (download + what changed, read here), then its release
+// page, what the app is and the project website.
+async function showAbout() {
+  const latest = data.app_latest, mine = data.app_version, target = latest || mine;
+  const newer = latest && latest !== mine;
+  const head = newer ? `<p class="about-head warn-text">Version ${esc(latest)} is available</p>`
+    : latest ? `<p class="about-head">You have the latest version</p>` : `<p class="about-head">This version</p>`;
+  const body = `<div class="about">${head}<div id="aboutNotes"><p style="color:var(--muted)">Loading what changed…</p></div>
+    <hr>${$("aboutTpl").innerHTML}
+    <p><a href="@SITE@" target="_blank" rel="noopener">Website: screenshots, guides, all downloads</a></p></div>`;
+  const closed = confirmDialog(`Tasmota Derust ${mine}`, body, "Close", true);
   try {
     const r = await fetch(`/api/changelog/${encodeURIComponent(target)}`);
     if (!r.ok) throw new Error(await r.text());
@@ -1048,6 +1085,7 @@ async function forgetAll() {
 // ---------------------------------------------------------------- events
 document.addEventListener("click", e => {
   if (e.target.closest("[data-about]")) { e.preventDefault(); showAbout(); return; }
+  if (e.target.closest("#settings, #mSettings")) { showSettings(); return; }
   const cl = e.target.closest("[data-changelog]");
   if (cl) { e.preventDefault(); showChangelog(cl.dataset.changelog); return; }
   const tab = e.target.closest("[data-view]");

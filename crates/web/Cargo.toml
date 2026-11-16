@@ -1,5 +1,6 @@
 [package]
 name = "tasmota-derust-web"
+default-run = "tasmota-derust-web"
 description = "A modern manager for Tasmota devices (web server)"
 version.workspace = true
 edition.workspace = true
@@ -12,4 +13,8 @@ winresource = { version = "0.1.34", default-features = false }
 tasmota-derust-core.workspace = true
 serde.workspace = true
 axum = "0.8.9"
-tokio = { version = "1.54.1", features = ["rt", "macros", "net", "sync"] }
+tokio = { version = "1.54.1", features = ["rt", "macros", "net", "sync", "time"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
+rustls-pki-types = { version = "1.16.0", features = ["std"] }
+ring = "0.17.14"

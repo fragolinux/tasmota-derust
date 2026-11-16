@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 crossbeam-channel.workspace = true
 directories = "6.0.0"
+ring = "0.17.14"
 rumqttc = { version = "0.25.1", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
