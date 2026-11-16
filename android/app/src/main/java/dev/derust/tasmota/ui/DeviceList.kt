@@ -77,7 +77,7 @@ private fun viewInfo(s: Snapshot, view: View): String? = when (view) {
     else -> null
 }
 
-/** A device that came online in the last 5 minutes: amber, see-through (light and dark). */
+/** A device that started in the last 5 minutes (plugged in or restarted): amber, see-through (light and dark). */
 private val NewTint = Color(0xFFF2C21B).copy(alpha = 0.22f)
 private val StarColor = Color(0xFFF2B01B)
 
@@ -98,7 +98,7 @@ private fun DeviceRow(d: Device, view: View, s: Snapshot, onOpen: () -> Unit, on
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (d.new) Text(
                     "★ ", color = StarColor, style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.semantics { contentDescription = "Came online in the last 5 minutes" },
+                    modifier = Modifier.semantics { contentDescription = "Started in the last 5 minutes" },
                 )
                 Text(
                     d.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,

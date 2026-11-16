@@ -162,6 +162,10 @@ desktop, the web page and Android, in light and dark themes. It counts only a li
 from the device (plugged in, restarted, reconnected), not the old status the broker replays
 when the app starts.
 
+Real devices soon showed that Tasmota also says "Online" after a mere Wi-Fi or broker
+reconnect, so a fan that had been running for days got a star. From 0.8.3 the star goes by
+the device's **uptime**: only a device that started in the last 5 minutes is marked.
+
 ## What each version does today
 
 All three share the same Rust core, so device handling, discovery, upgrade logic, SetOption

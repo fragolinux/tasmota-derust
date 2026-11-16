@@ -1605,7 +1605,9 @@ impl DerustApp {
             .store
             .devices
             .values()
-            .filter(|d| self.cfg.show_offline || !d.is_offline() || is_upgrading(d))
+            // Without "Show offline", only devices that answered: one the broker still calls
+            // Online (a stale retained LWT) would show up and vanish a few seconds later.
+            .filter(|d| self.cfg.show_offline || d.reachable() == Some(true) || is_upgrading(d))
             .collect();
         let sort = self.sort;
         rows.sort_by(|a, b| {
@@ -2379,7 +2381,7 @@ fn device_cell(ui: &mut egui::Ui, d: &Device, actions: &mut Vec<UiAction>) {
     }
     let name = d.display_name();
     if d.is_new() {
-        star_icon(ui).on_hover_text("Came online in the last 5 minutes");
+        star_icon(ui).on_hover_text("Started in the last 5 minutes (plugged in or restarted)");
     }
     if let Some(label) = d.offline_label() {
         let why = if label == "No answer" {

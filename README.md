@@ -86,10 +86,10 @@ GitHub the first time you open a SetOptions window. Nothing about you or your de
   buttons; a colour wheel and sliders set colour, brightness, white temperature and white
   (`HSBColor`, `Dimmer`, `CT`, `White`), each only when the light has it.
 - Show or hide devices that the broker knows about but that are currently offline.
-- **Just plugged in?** A device that came online in the last 5 minutes (plugged in,
-  restarted or reconnected while the app was watching) gets a ★ next to its name and an amber
-  row, on the desktop, the web page and Android. Devices already online when the app starts
-  don't.
+- **Just plugged in?** A device that started in the last 5 minutes (plugged in or restarted)
+  gets a ★ next to its name and an amber row, on the desktop, the web page and Android. It goes
+  by the device's uptime, so one that only reconnects (a Wi-Fi drop, a broker restart) is not
+  marked.
 - **Remove offline devices**, one (✕ next to the name, *Remove from list* on the phone) or all at
   once (*Remove offline*): they leave the list and the retained messages the broker keeps for
   them (last will, discovery…) are cleared, so they do not come back. A device that comes back

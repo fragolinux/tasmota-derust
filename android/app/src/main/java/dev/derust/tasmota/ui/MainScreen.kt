@@ -223,7 +223,9 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             }
             val s = snap
             val list = s?.devices.orEmpty()
-                .filter { (vm.showOffline || !it.isOffline || it.upgrading) && it.matches(vm.search) }
+                // Without "Show offline", only devices that answered: a stale retained "Online"
+                // would show up and vanish a few seconds later.
+                .filter { (vm.showOffline || it.online == true || it.upgrading) && it.matches(vm.search) }
                 .sortedFor(vm.sort)
             PullToRefreshBox(
                 isRefreshing = refreshing,

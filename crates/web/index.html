@@ -83,7 +83,7 @@ th:first-child, td:first-child { position: sticky; left: 0; background: var(--pa
 th:first-child { z-index: 3; background: var(--panel-2); }
 tbody tr:nth-child(even) td { background: var(--panel-2); }
 tbody tr.offline td { color: var(--muted); }
-/* Came online in the last 5 minutes: amber tint (see-through, fine in light and dark) and a star. */
+/* Started in the last 5 minutes (plugged in or restarted): amber tint (see-through, fine in light and dark) and a star. */
 tbody tr.new td, tbody tr.new:nth-child(even) td, .mrow.new { background: rgba(242, 194, 27, .22); }
 .star { color: #f2b01b; font-size: 1.05em; line-height: 1; text-shadow: 0 0 1px #c47a00; }
 tbody tr.offline td:first-child { font-style: italic; }
@@ -490,7 +490,7 @@ function bars(d) {
   return s + "</svg>";
 }
 
-const STAR = `<span class="star" title="Came online in the last 5 minutes" aria-label="New">★</span> `;
+const STAR = `<span class="star" title="Started in the last 5 minutes (plugged in or restarted)" aria-label="New">★</span> `;
 
 function nameHtml(d) {
   const star = d.new ? STAR : "";
@@ -598,7 +598,9 @@ function visibleDevices() {
   const q = ui.search.trim().toLowerCase();
   const list = data.devices.filter(d =>
     (!docMode.only || d.topic === docMode.only) &&
-    (ui.showOffline || d.online !== false || d.upgrading) &&
+    // Without "Show offline", only devices that answered (a stale retained "Online" would
+    // show up and vanish a few seconds later).
+    (ui.showOffline || d.online === true || d.upgrading) &&
     (!q || [d.name, d.topic, d.ip, d.hostname, d.module].some(x => x && x.toLowerCase().includes(q))));
   const { col, desc } = ui.sort;
   list.sort((a, b) => {
