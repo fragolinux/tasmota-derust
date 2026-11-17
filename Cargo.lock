@@ -3931,7 +3931,7 @@ dependencies = [
 
 [[package]]
 name = "tasmota-derust"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "chrono",
  "crossbeam-channel",
@@ -3949,7 +3949,7 @@ dependencies = [
 
 [[package]]
 name = "tasmota-derust-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "chrono",
  "crossbeam-channel",
@@ -3963,7 +3963,7 @@ dependencies = [
 
 [[package]]
 name = "tasmota-derust-mobile"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "tasmota-derust-core",
  "uniffi",
@@ -3971,7 +3971,7 @@ dependencies = [
 
 [[package]]
 name = "tasmota-derust-web"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "axum",
  "rcgen",
@@ -4358,7 +4358,7 @@ dependencies = [
 
 [[package]]
 name = "uniffi-bindgen"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "uniffi",
 ]
