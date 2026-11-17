@@ -210,8 +210,10 @@ Then point the app at `127.0.0.1`, port `1884`. From the Android emulator the co
 
 - App icon: the source is `packaging/icon/icon.svg`. `scripts/icons.sh` (macOS, needs Google
   Chrome) renders it and writes the desktop window icon, `packaging/macos/AppIcon.icns` and
-  `packaging/windows/icon.ico`; the results are committed. The Android icon is made of vector
-  drawables with the same paths (`res/drawable/ic_launcher_*.xml`): change them by hand.
+  `packaging/windows/icon.ico`; the results are committed. The house is the author's own
+  drawing (a raster image embedded in the SVG). Android: the tile is
+  `res/drawable/ic_launcher_background.xml` (same gradient), the house
+  `res/drawable-nodpi/ic_launcher_foreground.png` and `ic_launcher_monochrome.png` (432 px).
 
 - `cargo test --workspace` runs the tests (the web one starts the server on a free port).
 - `cargo run -p tasmota-derust-core --example probe [seconds]` listens to the configured broker

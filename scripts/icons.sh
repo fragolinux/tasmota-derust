@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Regenerates the app icon files from packaging/icon/icon.svg (macOS only: headless Chrome
 # renders the SVG, sips and iconutil make the sizes and the .icns). The results are committed,
-# so normal builds don't need this. Android uses vector drawables with the same paths
-# (android/app/src/main/res/drawable/ic_launcher_*.xml): update them by hand.
+# so normal builds don't need this. Android uses its own layers: the tile in
+# android/app/src/main/res/drawable/ic_launcher_background.xml (same gradient) and the house in
+# drawable-nodpi/ic_launcher_foreground.png / ic_launcher_monochrome.png (432 px).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
