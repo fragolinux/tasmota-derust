@@ -190,27 +190,35 @@ devices or network.
 
 **Desktop** (macOS; Windows and Linux look the same):
 
-![Home view: relays, telemetry, uptime and signal of every device](docs/screenshots/desktop-home.png)
+![Dashboard: big relay buttons, light colours and the main values of every online device](docs/screenshots/desktop-dashboard.png)
 
-| Health: uptime, restarts, load, signal | Firmware: outdated devices in orange |
+| | |
 |---|---|
+| **Health: uptime, restarts, load, signal** | **Firmware: outdated devices in orange** |
 | ![Health view](docs/screenshots/desktop-health.png) | ![Firmware view](docs/screenshots/desktop-firmware.png) |
 | **Wifi: SSID, AP and network of each device** | **MQTT: topic, full topic, group and fallback topics** |
 | ![Wifi view](docs/screenshots/desktop-wifi.png) | ![MQTT view](docs/screenshots/desktop-mqtt.png) |
-| **Message log** | **Settings: theme, broker, web server** |
-| ![MQTT message log under the device list](docs/screenshots/desktop-log.png) | ![Settings window](docs/screenshots/desktop-settings.png) |
-| **Console of one device** | **Colour wheel and sliders of a light** |
-| ![Console window: messages, favourite commands, command line](docs/screenshots/desktop-console.png) | ![Light window: colour wheel, brightness, white temperature](docs/screenshots/desktop-light.png) |
+| **Home: relays, telemetry, uptime** | **Find devices on the network (HTTP)** |
+| ![Home view: relays, telemetry, module, uptime and signal](docs/screenshots/desktop-home.png) | ![Find devices on the network over HTTP](docs/screenshots/desktop-find.png) |
+| **Group upgrade of ticked devices** | **Message log** |
+| ![Ticked devices upgraded together](docs/screenshots/desktop-group-upgrade.png) | ![MQTT message log under the device list](docs/screenshots/desktop-log.png) |
+| **Settings: theme, broker, firmware, web server** | **Console of one device** |
+| ![Settings window](docs/screenshots/desktop-settings.png) | ![Console window: messages, favourite commands, command line](docs/screenshots/desktop-console.png) |
+| **Colour wheel and sliders of a light** |  |
+| ![Light window: colour wheel, brightness, white temperature](docs/screenshots/desktop-light.png) |  |
 
 **Android**:
 
-| Home | Health | Firmware | Wifi |
+| | | | |
 |---|---|---|---|
-| <img src="docs/screenshots/android-home.png" alt="Device list" width="200"> | <img src="docs/screenshots/android-health.png" alt="Health view" width="200"> | <img src="docs/screenshots/android-firmware.png" alt="Firmware view" width="200"> | <img src="docs/screenshots/android-wifi.png" alt="Wifi view" width="200"> |
-| **MQTT** | **Device details** | **Read-only** | **Settings** |
-| <img src="docs/screenshots/android-mqtt.png" alt="MQTT view" width="200"> | <img src="docs/screenshots/android-device.png" alt="Device detail sheet" width="200"> | <img src="docs/screenshots/android-read-only.png" alt="A command blocked by read-only mode" width="200"> | <img src="docs/screenshots/android-settings.png" alt="Broker settings" width="200"> |
-| **Console** | **Colour wheel** | | |
-| <img src="docs/screenshots/android-console.png" alt="Console of one device" width="200"> | <img src="docs/screenshots/android-light.png" alt="Colour wheel and sliders in the device sheet" width="200"> | | |
+| **Dashboard** | **Ticking devices** | **Find devices** | **Home** |
+| <img src="docs/screenshots/android-dashboard.png" alt="Dashboard" width="200"> | <img src="docs/screenshots/android-select.png" alt="Ticked devices" width="200"> | <img src="docs/screenshots/android-find.png" alt="Find devices on the network" width="200"> | <img src="docs/screenshots/android-home.png" alt="Device list" width="200"> |
+| **Health** | **Firmware** | **Wifi** | **MQTT** |
+| <img src="docs/screenshots/android-health.png" alt="Health view" width="200"> | <img src="docs/screenshots/android-firmware.png" alt="Firmware view" width="200"> | <img src="docs/screenshots/android-wifi.png" alt="Wifi view" width="200"> | <img src="docs/screenshots/android-mqtt.png" alt="MQTT view" width="200"> |
+| **Device details** | **Read-only** | **Console** | **Colour wheel** |
+| <img src="docs/screenshots/android-device.png" alt="Device detail sheet" width="200"> | <img src="docs/screenshots/android-read-only.png" alt="A command blocked by read-only mode" width="200"> | <img src="docs/screenshots/android-console.png" alt="Console of one device" width="200"> | <img src="docs/screenshots/android-light.png" alt="Colour wheel and sliders in the device sheet" width="200"> |
+| **Settings** |  |  |  |
+| <img src="docs/screenshots/android-settings.png" alt="Settings" width="200"> |  |  |  |
 
 ## Desktop app
 
