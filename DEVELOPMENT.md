@@ -183,6 +183,9 @@ reports. The `.dmg` is made with `hdiutil`, so the macOS desktop app is packed o
 (among them an ESP32 that upgrades through safeboot, an unplugged plug with a stale
 "Online" LWT, and an ESP8266 on 6.7.1 with about 1 MB of flash that follows the whole
 upgrade path, minimal images included, plus an RGBCCT and a CCT bulb). It refuses any broker that is not on this computer.
+Two devices, "Fan (HQ)" and "Spot (HQ)", sit on the FullTopic
+`headquarters/meeting-room-3/%prefix%/%topic%/` without `tasmota/discovery`: they show up once
+Settings > MQTT topics has the pattern `headquarters/+/%prefix%/%topic%/`.
 Three more devices are **HTTP-only** (MQTT off) on `127.0.0.1:18081-18083` (the last one has
 the web password `secret`): search the range `127.0.0.1:18081-18083` with Find…, then Enable
 MQTT makes them join the local broker. From the Android emulator, `adb reverse` those ports too.

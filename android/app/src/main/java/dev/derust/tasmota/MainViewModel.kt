@@ -284,6 +284,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             session.value = Session(
                 Broker(b.host.trim(), b.port.toUShort(), b.username, b.password),
                 readOnly,
+                b.topicPatterns,
+                b.topicDevices,
             )
         }
     }

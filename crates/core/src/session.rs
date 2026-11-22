@@ -107,13 +107,27 @@ impl Session {
     /// Connects to the broker and starts the background threads. `notify` is called when
     /// something may have changed (it can be a no-op for front ends that poll).
     pub fn start(broker: &BrokerConfig, read_only: bool, notify: Notify) -> Session {
+        Self::start_with(broker, &Default::default(), read_only, notify)
+    }
+
+    /// [`Session::start`] with custom MQTT topics (FullTopic patterns, devices with their own).
+    pub fn start_with(
+        broker: &BrokerConfig,
+        topics: &crate::topics::Topics,
+        read_only: bool,
+        notify: Notify,
+    ) -> Session {
         let (mqtt, rx) = Mqtt::start(broker, notify.clone());
         let mqtt = Arc::new(mqtt);
-        let mut store = Store::default();
+        let mut store = Store {
+            topics: topics.clone(),
+            ..Default::default()
+        };
         for h in crate::http_dev::saved() {
             store.add_http_saved(&h);
         }
-        let first_poll = store.poll_http();
+        let mut first_poll = store.initial_actions();
+        first_poll.extend(store.poll_http());
         let shared = Arc::new(Mutex::new(Shared {
             store,
             search: None,
@@ -397,6 +411,11 @@ impl Session {
         };
         run_actions(&self.shared, &self.mqtt, actions, &self.notify);
         Ok(())
+    }
+
+    /// The custom MQTT topics in use (FullTopic patterns, devices with their own).
+    pub fn topics(&self) -> crate::topics::Topics {
+        self.shared.lock().unwrap().store.topics.clone()
     }
 
     /// This app's broker (host, port, user, whether it has a password): what "Enable MQTT"

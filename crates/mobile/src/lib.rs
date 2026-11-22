@@ -394,6 +394,13 @@ pub fn set_ota_device(topic: String, o: OtaDevice) -> Result<(), SettingsError> 
     .map_err(ota_err)
 }
 
+/// Why the custom MQTT topics typed in the settings are wrong (null: fine). One FullTopic
+/// pattern per line; one device per line as `<topic> <FullTopic>`.
+#[uniffi::export]
+pub fn check_topics(topic_patterns: String, topic_devices: String) -> Option<String> {
+    tasmota_derust_core::topics::Topics::from_lines(&topic_patterns, &topic_devices).err()
+}
+
 /// The phone's own network (what an empty search range means), e.g. "192.168.1.0/24".
 #[uniffi::export]
 pub fn local_range() -> Option<String> {
@@ -501,7 +508,10 @@ pub struct Session {
 impl Session {
     /// Connects to the broker in the background. Poll `snapshot()` to see progress.
     #[uniffi::constructor]
-    pub fn new(broker: Broker, read_only: bool) -> Arc<Self> {
+    /// `topic_patterns`, `topic_devices`: the settings' custom MQTT topics (see `check_topics`).
+    pub fn new(broker: Broker, read_only: bool, topic_patterns: String, topic_devices: String) -> Arc<Self> {
+        let topics = tasmota_derust_core::topics::Topics::from_lines(&topic_patterns, &topic_devices)
+            .unwrap_or_default();
         let cfg = BrokerConfig {
             host: broker.host,
             port: broker.port,
@@ -509,7 +519,7 @@ impl Session {
             password: broker.password,
         };
         Arc::new(Session {
-            inner: session::Session::start(&cfg, read_only, Arc::new(|| {})),
+            inner: session::Session::start_with(&cfg, &topics, read_only, Arc::new(|| {})),
         })
     }
 

@@ -14,6 +14,7 @@ pub mod ota;
 pub mod ota_policy;
 pub mod session;
 pub mod setoption;
+pub mod topics;
 pub mod wifi;
 
 use std::sync::Arc;

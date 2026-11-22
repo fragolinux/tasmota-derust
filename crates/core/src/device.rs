@@ -688,6 +688,8 @@ pub struct Store {
     pub sizes: crate::ota::Sizes,
     /// Recent MQTT messages of each device, for the console.
     pub console: crate::console::Log,
+    /// Custom FullTopics to find devices by their LWT (see `topics`).
+    pub topics: crate::topics::Topics,
 }
 
 impl Store {
@@ -738,6 +740,18 @@ impl Store {
                 hit = Some((key.clone(), false, s.to_string()));
                 break;
             }
+        }
+
+        // Custom FullTopics (patterns and device entries): the LWT tells the real FullTopic.
+        if hit.is_none()
+            && (payload.eq_ignore_ascii_case("online") || payload.eq_ignore_ascii_case("offline"))
+            && let Some((key, ft)) = self.topics.match_lwt(topic)
+        {
+            let d = Device::new(&key, &ft, default_prefixes());
+            out.push(Action::Subscribe(format!("{}+", d.tele_prefix)));
+            out.push(Action::Subscribe(format!("{}+", d.stat_prefix)));
+            self.devices.insert(key.clone(), d);
+            hit = Some((key, true, "LWT".into()));
         }
 
         // Fallback discovery from LWT for devices without native discovery.
@@ -1144,6 +1158,15 @@ impl Store {
             }
         }
         None
+    }
+
+    /// The subscriptions the custom topics need (at every connection).
+    pub fn initial_actions(&self) -> Vec<Action> {
+        self.topics
+            .subscriptions()
+            .into_iter()
+            .map(Action::Subscribe)
+            .collect()
     }
 
     /// HTTP-only devices that now also talk MQTT (same MAC or address): removed, since the
@@ -1564,6 +1587,25 @@ mod tests {
         s.handle("stat/plug/STATUS0", &status_fwr("13.3.0(tasmota32)"));
         assert!(s.devices["plug"].is_online());
         assert!(s.command("plug", "POWER1", "TOGGLE").is_some());
+    }
+
+    #[test]
+    fn custom_full_topic_from_lwt() {
+        let mut s = Store {
+            topics: crate::topics::Topics {
+                patterns: vec!["headquarters/+/%prefix%/%topic%/".into()],
+                devices: vec![],
+            },
+            ..Default::default()
+        };
+        assert_eq!(s.initial_actions().len(), 1);
+        let a = s.handle("headquarters/room-3/tele/fan/LWT", "Online");
+        let d = &s.devices["fan"];
+        assert_eq!(d.cmnd("STATUS"), "headquarters/room-3/cmnd/fan/STATUS");
+        assert!(a.iter().any(|x| matches!(x, Action::Subscribe(t) if t == "headquarters/room-3/stat/fan/+")));
+        assert!(a.iter().any(|x| matches!(x, Action::Publish { topic, .. } if topic == "headquarters/room-3/cmnd/fan/STATUS")));
+        s.handle("headquarters/room-3/stat/fan/STATUS0", &status_fwr("8.5.1(tasmota)"));
+        assert!(s.devices["fan"].is_online());
     }
 
     #[test]

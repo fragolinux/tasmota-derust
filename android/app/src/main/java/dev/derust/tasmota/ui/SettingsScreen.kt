@@ -69,9 +69,12 @@ fun SettingsScreen(
     var user by rememberSaveable { mutableStateOf(current.username) }
     var pass by rememberSaveable { mutableStateOf(current.password) }
     var showPass by rememberSaveable { mutableStateOf(false) }
+    var patterns by rememberSaveable { mutableStateOf(current.topicPatterns) }
+    var devices by rememberSaveable { mutableStateOf(current.topicDevices) }
+    val topicsProblem = remember(patterns, devices) { dev.derust.tasmota.core.checkTopics(patterns, devices) }
 
     val portNum = port.toIntOrNull()?.takeIf { it in 1..65535 }
-    val valid = host.isNotBlank() && portNum != null
+    val valid = host.isNotBlank() && portNum != null && topicsProblem == null
 
     if (canClose) BackHandler(onBack = onClose)
 
@@ -115,9 +118,31 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
+            Text("MQTT topics", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Devices are found by their LWT and by tasmota/discovery. Those with another FullTopic that don't " +
+                    "publish tasmota/discovery (SetOption19 1, or firmware before 9.x) need it here. + stands for any one level.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                patterns, { patterns = it }, label = { Text("FullTopic patterns, one per line") },
+                placeholder = { Text("headquarters/+/%prefix%/%topic%/") },
+                textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                minLines = 2, modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                devices, { devices = it }, label = { Text("Single devices: topic, space, FullTopic") },
+                placeholder = { Text("plug1 site/garage/%prefix%/%topic%/") },
+                textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                minLines = 2, modifier = Modifier.fillMaxWidth(),
+            )
+            topicsProblem?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+
             Spacer(Modifier.padding(top = 4.dp))
             Button(
-                onClick = { onSave(BrokerSettings(host.trim(), portNum ?: 1883, user, pass)) },
+                onClick = { onSave(BrokerSettings(host.trim(), portNum ?: 1883, user, pass, patterns, devices)) },
                 enabled = valid,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Save and connect") }

@@ -231,6 +231,9 @@ pub struct DerustApp {
     ota_error: Option<String>,
     /// Web password of an HTTP-only device being typed: device, password.
     http_pw_open: Option<(String, String)>,
+    /// Custom MQTT topics being edited in Settings (one per line).
+    topics_patterns_draft: String,
+    topics_devices_draft: String,
     #[cfg(feature = "screenshots")]
     shots: Option<shots::Shots>,
 }
@@ -315,9 +318,13 @@ impl DerustApp {
             ota_draft: ota_policy::default_settings(),
             ota_error: None,
             http_pw_open: None,
+            topics_patterns_draft: String::new(),
+            topics_devices_draft: String::new(),
             #[cfg(feature = "screenshots")]
             shots: shots::Shots::from_env(),
         };
+        app.topics_patterns_draft = app.cfg.topics.patterns_text();
+        app.topics_devices_draft = app.cfg.topics.devices_text();
         // Opens on the dashboard, offline devices hidden.
         app.cfg.view = View::Dashboard;
         app.cfg.show_offline = false;
@@ -334,7 +341,10 @@ impl DerustApp {
     fn connect(&mut self, ctx: &egui::Context) {
         self.mqtt = None;
         self.rx = None;
-        self.store = Store::default();
+        self.store = Store {
+            topics: self.cfg.topics.clone(),
+            ..Default::default()
+        };
         // HTTP-only devices found earlier: back in the list, asked for their status.
         for h in http_dev::saved() {
             self.store.add_http_saved(&h);
@@ -348,6 +358,9 @@ impl DerustApp {
         let (mqtt, rx) = Mqtt::start(&self.cfg.broker, repaint(ctx));
         self.mqtt = Some(mqtt);
         self.rx = Some(rx);
+        // Custom topics: their LWT subscriptions (kept across reconnects).
+        let subs = self.store.initial_actions();
+        self.apply(subs);
         self.conn = Conn::Connecting;
         self.push_log(
             '*',
@@ -595,6 +608,8 @@ impl DerustApp {
                         self.draft = self.cfg.broker.clone();
                         self.login_draft = LoginDraft::from(&self.cfg.web_login);
                         self.https_draft = self.cfg.web_https;
+                        self.topics_patterns_draft = self.cfg.topics.patterns_text();
+                        self.topics_devices_draft = self.cfg.topics.devices_text();
                         self.settings_open = true;
                         self.web_ask = false;
                     }
@@ -2104,6 +2119,8 @@ impl DerustApp {
                     self.draft = self.cfg.broker.clone();
                     self.login_draft = LoginDraft::from(&self.cfg.web_login);
                     self.https_draft = self.cfg.web_https;
+                    self.topics_patterns_draft = self.cfg.topics.patterns_text();
+                    self.topics_devices_draft = self.cfg.topics.devices_text();
                     self.settings_open = true;
                 }
                 ui.separator();
@@ -2564,11 +2581,15 @@ impl DerustApp {
         }
         let mut open = true;
         let mut connect = false;
+        // Taller than small screens: it scrolls.
+        let max_h = (ctx.content_rect().height() - 80.0).max(240.0);
         egui::Window::new("Settings")
             .collapsible(false)
             .resizable(false)
             .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
             .open(&mut open)
+            .max_height(max_h)
+            .vscroll(true)
             .show(ctx, |ui| {
                 // Applied and saved at once, unlike the broker below.
                 ui.horizontal(|ui| {
@@ -2601,6 +2622,36 @@ impl DerustApp {
                         ui.label("Password");
                         ui.add(egui::TextEdit::singleline(&mut self.draft.password).password(true));
                         ui.end_row();
+                    });
+                let topics_problem = tasmota_derust_core::topics::Topics::from_lines(
+                    &self.topics_patterns_draft,
+                    &self.topics_devices_draft,
+                )
+                .err();
+                egui::CollapsingHeader::new("MQTT topics: devices on a custom FullTopic")
+                    .id_salt("topics")
+                    .default_open(!self.cfg.topics.is_empty())
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("Devices are found by their LWT and by tasmota/discovery. Those with another FullTopic that don't publish tasmota/discovery (SetOption19 1, or firmware before 9.x) need it here. + stands for any one level.").weak().small());
+                        ui.label("FullTopic patterns, one per line");
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.topics_patterns_draft)
+                                .hint_text("headquarters/+/%prefix%/%topic%/")
+                                .font(egui::TextStyle::Monospace)
+                                .desired_rows(2)
+                                .desired_width(f32::INFINITY),
+                        );
+                        ui.label("Single devices: topic, a space, its FullTopic");
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.topics_devices_draft)
+                                .hint_text("plug1 site/garage/%prefix%/%topic%/")
+                                .font(egui::TextStyle::Monospace)
+                                .desired_rows(2)
+                                .desired_width(f32::INFINITY),
+                        );
+                        if let Some(p) = &topics_problem {
+                            ui.colored_label(RED, p.as_str());
+                        }
                     });
                 ui.separator();
                 ui.label(RichText::new("Firmware").strong());
@@ -2712,7 +2763,7 @@ impl DerustApp {
                 );
                 ui.add_space(4.0);
                 if ui
-                    .add_enabled(problem.is_none(), egui::Button::new("Save and connect"))
+                    .add_enabled(problem.is_none() && topics_problem.is_none(), egui::Button::new("Save and connect"))
                     .clicked()
                 {
                     connect = true;
@@ -2720,6 +2771,12 @@ impl DerustApp {
             });
         if connect {
             self.cfg.broker = self.draft.clone();
+            if let Ok(t) = tasmota_derust_core::topics::Topics::from_lines(
+                &self.topics_patterns_draft,
+                &self.topics_devices_draft,
+            ) {
+                self.cfg.topics = t;
+            }
             self.cfg.web_login = self.login_draft.apply(&self.cfg.web_login);
             self.login_draft = LoginDraft::from(&self.cfg.web_login);
             self.cfg.web_https = self.https_draft;
@@ -3719,6 +3776,16 @@ fn text_label(ui: &mut egui::Ui, text: String, numeric: bool, dim: bool) -> egui
 
 fn cell(ui: &mut egui::Ui, d: &Device, col: Col, ci: &CellCtx<'_>, actions: &mut Vec<UiAction>) {
     let online = d.is_online();
+    // HTTP-only devices have no MQTT topics.
+    if d.http_host.is_some()
+        && matches!(
+            col,
+            Col::Topic | Col::FullTopic | Col::CommandTopic | Col::StatTopic | Col::TeleTopic | Col::FallbackTopic | Col::GroupTopic
+        )
+    {
+        ui.label(RichText::new("—").weak()).on_hover_text("Reached over HTTP only: no MQTT topics");
+        return;
+    }
     match col {
         Col::Power => {
             ui.spacing_mut().item_spacing.x = 3.0;

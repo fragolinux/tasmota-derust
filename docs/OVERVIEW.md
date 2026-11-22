@@ -189,6 +189,14 @@ menu, the Wi-Fi networks window and the device sheet.
 - **Find devices on the network** over HTTP, also those without MQTT: they join the list marked
   HTTP and work over HTTP; **Enable MQTT** sends them the broker settings in one go.
 
+### Next: devices on custom MQTT topics
+
+A user's devices live on topics like `headquarters/meeting-room-3/%prefix%/%topic%/` with
+`SetOption19 1` (Home Assistant discovery instead of `tasmota/discovery`): the app could not
+see them. Settings now take **FullTopic patterns** (`headquarters/+/%prefix%/%topic%/`, `+`
+for any one level) and **single devices** with their own FullTopic; the app listens to the
+LWT they imply and the devices work like any other (relays, console, upgrades).
+
 ## What each version does today
 
 All three share the same Rust core, so device handling, discovery, upgrade logic, SetOption

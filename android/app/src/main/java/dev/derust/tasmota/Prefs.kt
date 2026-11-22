@@ -9,6 +9,10 @@ data class BrokerSettings(
     val port: Int = 1883,
     val username: String = "",
     val password: String = "",
+    /** Custom MQTT topics: FullTopic patterns, one per line. */
+    val topicPatterns: String = "",
+    /** Devices with their own FullTopic: `<topic> <FullTopic>`, one per line. */
+    val topicDevices: String = "",
 )
 
 /** App colours: follow the phone, or always light / dark. */
@@ -22,6 +26,8 @@ class Prefs(context: Context) {
         port = p.getInt("port", 1883),
         username = p.getString("username", "") ?: "",
         password = p.getString("password", "") ?: "",
+        topicPatterns = p.getString("topicPatterns", "") ?: "",
+        topicDevices = p.getString("topicDevices", "") ?: "",
     )
 
     fun saveBroker(b: BrokerSettings) = p.edit {
@@ -29,6 +35,8 @@ class Prefs(context: Context) {
         putInt("port", b.port)
         putString("username", b.username)
         putString("password", b.password)
+        putString("topicPatterns", b.topicPatterns)
+        putString("topicDevices", b.topicDevices)
         remove("readOnly") // was a broker setting; read-only now starts on at every launch
     }
 

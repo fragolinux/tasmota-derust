@@ -80,6 +80,12 @@ GitHub the first time you open a SetOptions window. Nothing about you or your de
 
 - Connects to your MQTT broker and discovers Tasmota devices automatically
   (native `tasmota/discovery` messages, plus LWT-based discovery for older firmware).
+- **Custom MQTT topics** (Settings > MQTT topics): devices with another FullTopic that don't
+  publish `tasmota/discovery` (`SetOption19 1`, or firmware older than 9.x) are found from a
+  **FullTopic pattern**, with `+` for any one level, e.g. `headquarters/+/%prefix%/%topic%/`
+  for every room of a building (`%hostname%` or `%id%` work in place of `%topic%`), or from a
+  **single device** entry, topic plus its own FullTopic (`plug1 site/garage/%prefix%/%topic%/`).
+  The app listens to the LWT those imply and learns each device's real FullTopic from it.
 - One global device list with six views: **Dashboard, Home, Health, Firmware, Wifi, MQTT**.
 - **Dashboard**, the first view at every start: one card per device with big relay buttons,
   the light's colour (a tap opens colour and brightness) and its main values (power and
@@ -217,8 +223,8 @@ devices or network.
 | <img src="docs/screenshots/android-health.png" alt="Health view" width="200"> | <img src="docs/screenshots/android-firmware.png" alt="Firmware view" width="200"> | <img src="docs/screenshots/android-wifi.png" alt="Wifi view" width="200"> | <img src="docs/screenshots/android-mqtt.png" alt="MQTT view" width="200"> |
 | **Device details** | **Read-only** | **Console** | **Colour wheel** |
 | <img src="docs/screenshots/android-device.png" alt="Device detail sheet" width="200"> | <img src="docs/screenshots/android-read-only.png" alt="A command blocked by read-only mode" width="200"> | <img src="docs/screenshots/android-console.png" alt="Console of one device" width="200"> | <img src="docs/screenshots/android-light.png" alt="Colour wheel and sliders in the device sheet" width="200"> |
-| **Settings** |  |  |  |
-| <img src="docs/screenshots/android-settings.png" alt="Settings" width="200"> |  |  |  |
+| **Settings** | **MQTT topics** | | |
+| <img src="docs/screenshots/android-settings.png" alt="Settings" width="200"> | <img src="docs/screenshots/android-topics.png" alt="MQTT topics: FullTopic patterns and single devices" width="200"> |  |  |
 
 ## Desktop app
 

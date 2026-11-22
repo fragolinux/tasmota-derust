@@ -157,6 +157,8 @@ pub struct Config {
     pub web_login: WebLogin,
     /// Serve the web interface over HTTPS (self-signed certificate, port 8443).
     pub web_https: bool,
+    /// Custom MQTT topics: FullTopic patterns and devices with their own FullTopic.
+    pub topics: crate::topics::Topics,
 }
 
 impl Default for Config {
@@ -169,6 +171,7 @@ impl Default for Config {
             theme: "system".into(),
             web_login: WebLogin::default(),
             web_https: false,
+            topics: Default::default(),
         };
         c.normalize();
         c

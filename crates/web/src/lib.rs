@@ -120,6 +120,7 @@ pub fn router(
             get(api_console).post(api_console_send),
         )
         .route("/api/search", get(api_search_range).post(api_search))
+        .route("/api/topics", get(api_topics))
         .route("/api/upgrade-many", post(api_upgrade_many))
         .route("/api/enable-mqtt", get(api_mqtt_defaults).post(api_enable_mqtt))
         .route("/api/devices/{topic}/http-password", post(api_http_password))
@@ -391,7 +392,9 @@ impl WebServer {
         let listener = TcpListener::bind(listen)?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
-        let session = Arc::new(Session::start(broker, read_only, Arc::new(|| {})));
+        // The desktop app's custom topics (same config file).
+        let topics = Config::load().topics;
+        let session = Arc::new(Session::start_with(broker, &topics, read_only, Arc::new(|| {})));
         let app = router(session.clone(), read_only_hint, login, https);
         let login = login.is_set();
         let (tx, rx) = oneshot::channel::<()>();
@@ -614,7 +617,7 @@ pub fn standalone_main(read_only: bool) {
         .build()
         .expect("tokio runtime");
     rt.block_on(async move {
-        let session = Arc::new(Session::start(&cfg.broker, read_only, Arc::new(|| {})));
+        let session = Arc::new(Session::start_with(&cfg.broker, &cfg.topics, read_only, Arc::new(|| {})));
         let listener = tokio::net::TcpListener::bind(listen)
             .await
             .unwrap_or_else(|e| {
@@ -837,6 +840,11 @@ async fn api_console_send(
     Json(body): Json<ConsoleBody>,
 ) -> Response {
     reply(&st, st.session.console_send(&topic, &body.line, body.confirm))
+}
+
+/// The custom MQTT topics in use (set in the desktop app's Settings or the config file).
+async fn api_topics(State(st): State<AppState>) -> Json<tasmota_derust_core::topics::Topics> {
+    Json(st.session.topics())
 }
 
 #[derive(Serialize)]

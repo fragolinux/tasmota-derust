@@ -681,6 +681,9 @@ function updateHtml(d) {
 
 function cellHtml(d, c) {
   const off = d.online === false;
+  // HTTP-only devices have no MQTT topics.
+  if (d.http && ["topic", "full_topic", "cmnd_topic", "stat_topic", "tele_topic", "fallback_topic", "group_topic"].includes(c))
+    return `<span style="color:var(--muted)" title="Reached over HTTP only: no MQTT topics">—</span>`;
   switch (c) {
     case "power": return `<span class="relays">${relaysHtml(d)}</span>`;
     case "telemetry": {
@@ -1185,6 +1188,12 @@ async function showSettings() {
          : "Plain HTTP without TLS: the login and all traffic travel in clear text on the network."}</p>
        <p style="color:var(--muted)">HTTPS is turned on in the desktop app's Settings, or with --https
        (DERUST_WEB_HTTPS=1).</p>` : "";
+  let topics = { patterns: [], devices: [] };
+  try { topics = await (await fetch("/api/topics", { cache: "no-store" })).json(); } catch {}
+  const tlist = [...topics.patterns, ...topics.devices.map(d => `${d.topic} ${d.full_topic}`)];
+  const topicsHtml = `<p><b>MQTT topics</b> (devices on a custom FullTopic)<br>${tlist.length
+      ? tlist.map(t => `<span class="mono">${esc(t)}</span>`).join("<br>") : "None: only the standard topics and tasmota/discovery."}</p>
+    <p style="color:var(--muted)">Set where the server runs: in the desktop app's Settings (MQTT topics), or in its config file.</p>`;
   let ota = { custom_url: "", max_version: "" };
   try { ota = await (await fetch("/api/ota", { cache: "no-store" })).json(); } catch {}
   const fw = `<p><b>Firmware</b> (for every device; a device's Firmware source can differ)</p>
@@ -1193,7 +1202,7 @@ async function showSettings() {
     <p style="color:var(--muted)">{build} becomes the device's build (tasmota, tasmota-sensors, tasmota32c3…). The version on your own server can't be checked: upgrades install what it serves. The highest version applies to the official server.</p>
     <button class="btn" id="otaSave">Save firmware settings</button> <span id="otaMsg"></span>`;
   const dlg = $("dlg");
-  const closed = confirmDialog("Settings", `<div class="about">${theme}<hr>${fw}<hr>${broker}</div>`, "Close", true);
+  const closed = confirmDialog("Settings", `<div class="about">${theme}<hr>${fw}<hr>${broker}${topicsHtml}</div>`, "Close", true);
   dlg.onclick = async e => {
     if (e.target.id === "otaSave") {
       const r = await jsonPost("/api/ota", { custom_url: $("otaUrl").value, max_version: $("otaMax").value });

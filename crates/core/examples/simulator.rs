@@ -15,6 +15,10 @@
 //!                    the network search, use the range 127.0.0.1:18081-18083; the one on
 //!                    18083 has the web password "secret"
 //!
+//!   "Fan (HQ)", "Spot (HQ)": FullTopic headquarters/meeting-room-3/%prefix%/%topic%/ and no
+//!                    tasmota/discovery (like SetOption19 1): found with the topic pattern
+//!                    headquarters/+/%prefix%/%topic%/ (Settings > MQTT topics)
+//!
 //! Safety: it refuses any broker that is not on this machine (127.0.0.1 / ::1 / localhost),
 //! so it can never publish fake states or answers on a real home broker.
 
@@ -34,6 +38,8 @@ struct Fake {
     /// Its web server on 127.0.0.1 (HTTP-only devices).
     http_port: Option<u16>,
     web_password: Option<&'static str>,
+    /// Custom FullTopic `headquarters/<room>/%prefix%/%topic%/` (no tasmota/discovery).
+    room: Option<&'static str>,
     topic: &'static str,
     name: &'static str,
     module: &'static str,
@@ -139,7 +145,37 @@ const SSIDS: [&str; 2] = ["Home-Main", "Home-Extender"];
 
 #[allow(clippy::type_complexity)]
 fn devices() -> Vec<Fake> {
-    devices_mqtt_template().into_iter().chain(http_devices()).collect()
+    devices_mqtt_template()
+        .into_iter()
+        .chain(http_devices())
+        .chain(room_devices())
+        .collect()
+}
+
+/// Devices on a custom FullTopic, without tasmota/discovery (8.5.1, like SetOption19 1).
+fn room_devices() -> Vec<Fake> {
+    let base = devices_mqtt_template();
+    let make = |from: &str, topic: &'static str, name: &'static str, mac: &str| {
+        let mut f = base.iter().find(|f| f.topic == from).cloned().expect("template");
+        f.mqtt = false;
+        f.room = Some("meeting-room-3");
+        f.topic = topic;
+        f.name = name;
+        f.mac = mac.into();
+        f.version = "8.5.1".into();
+        f.build = "tasmota".into();
+        f.online = true;
+        f.stale_lwt = false;
+        f
+    };
+    vec![
+        make("cucina", "hq_fan", "Fan (HQ)", "AA:BB:CC:00:00:91"),
+        make("lampada", "hq_spot", "Spot (HQ)", "AA:BB:CC:00:00:92"),
+    ]
+}
+
+fn room_topic(f: &Fake, prefix: &str, rest: &str) -> String {
+    format!("headquarters/{}/{prefix}/{}/{rest}", f.room.unwrap_or("room"), f.topic)
 }
 
 #[allow(clippy::type_complexity)]
@@ -335,6 +371,7 @@ fn devices_mqtt_template() -> Vec<Fake> {
                     mqtt: true,
                     http_port: None,
                     web_password: None,
+                    room: None,
                     topic,
                     name,
                     module,
@@ -664,6 +701,11 @@ fn main() {
         match ev {
             Ok(Event::Incoming(Packet::ConnAck(_))) => {
                 let _ = client.try_subscribe("cmnd/+/+", QoS::AtMostOnce);
+                let _ = client.try_subscribe("headquarters/+/cmnd/+/+", QoS::AtMostOnce);
+                for f in fakes.lock().unwrap().iter().filter(|f| f.room.is_some()) {
+                    publish(&client, room_topic(f, "tele", "LWT"), "Online".into(), true);
+                    publish(&client, room_topic(f, "tele", "STATE"), f.state().to_string(), false);
+                }
                 for f in fakes.lock().unwrap().iter().filter(|f| f.mqtt) {
                     publish(
                         &client,
@@ -688,6 +730,12 @@ fn main() {
                 }
             }
             Ok(Event::Incoming(Packet::Publish(p))) => {
+                if p.topic.starts_with("headquarters/") {
+                    let payload = String::from_utf8_lossy(&p.payload).trim().to_string();
+                    println!("<- {} {}", p.topic, payload);
+                    room_command(&client, &fakes, &p.topic, &payload);
+                    continue;
+                }
                 let parts: Vec<&str> = p.topic.split('/').collect();
                 if parts.len() != 3 {
                     continue;
@@ -1140,5 +1188,42 @@ fn http_answer(
         _ => json!({"Command": "Unknown"}),
     };
     ("200 OK", body.to_string())
+}
+
+/// Commands to the custom-FullTopic devices: Status, Power, Module, SSId.
+fn room_command(client: &Client, fakes: &Arc<Mutex<Vec<Fake>>>, topic: &str, payload: &str) {
+    let parts: Vec<&str> = topic.split('/').collect();
+    let [_, room, "cmnd", t, cmd] = parts[..] else { return };
+    let mut all = fakes.lock().unwrap();
+    let Some(f) = all.iter_mut().find(|f| f.room == Some(room) && f.topic == t) else { return };
+    let send = |rest: &str, body: String| {
+        let _ = client.try_publish(room_topic(f, "stat", rest), QoS::AtMostOnce, false, body.into_bytes());
+    };
+    let cmd = cmd.to_ascii_uppercase();
+    match cmd.as_str() {
+        "STATUS" => send("STATUS0", f.status0().to_string()),
+        "MODULE" => send("RESULT", json!({"Module": {"1": f.module}}).to_string()),
+        c if c.starts_with("SSID") => {
+            let i = if c.ends_with('2') { 1 } else { 0 };
+            send("RESULT", json!({ format!("SSId{}", i + 1): f.ssids[i] }).to_string())
+        }
+        c if c.starts_with("POWER") => {
+            let i = c[5..].parse::<usize>().unwrap_or(1).saturating_sub(1);
+            if i >= f.relays {
+                return;
+            }
+            f.power[i] = match payload.to_ascii_uppercase().as_str() {
+                "ON" | "1" => true,
+                "OFF" | "0" => false,
+                "TOGGLE" | "2" => !f.power[i],
+                _ => f.power[i],
+            };
+            let key = f.power_key(i);
+            let on = if f.power[i] { "ON" } else { "OFF" };
+            let _ = client.try_publish(room_topic(f, "stat", "RESULT"), QoS::AtMostOnce, false, json!({ key.clone(): on }).to_string().into_bytes());
+            let _ = client.try_publish(room_topic(f, "stat", &key), QoS::AtMostOnce, false, on.as_bytes().to_vec());
+        }
+        _ => {}
+    }
 }
 
