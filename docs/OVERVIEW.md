@@ -24,7 +24,9 @@ One principle shaped it from day one: **it must never surprise you on your real 
 Every front end starts in **read-only mode** at every launch. In that mode it only sends
 harmless status queries; relays, Wi-Fi changes, settings and upgrades are refused until you
 explicitly allow commands. The web server is read-only unless you deliberately start the
-read-write one. Firmware upgrades always go one device at a time, never in bulk.
+read-write one. Firmware upgrades are always started by you, after a confirmation that says
+what will happen to each device; when several devices are upgraded together, each one runs on
+its own, so a problem on one never touches the others.
 
 ## How it grew, release by release
 
@@ -166,36 +168,57 @@ Real devices soon showed that Tasmota also says "Online" after a mere Wi-Fi or b
 reconnect, so a fan that had been running for days got a star. From 0.8.3 the star goes by
 the device's **uptime**: only a device that started in the last 5 minutes is marked.
 
-### Next: a console for each device
+### 0.8.2 and 0.8.3: small corrections
 
-The tool the original TDM had and this one was missing: a **console per device**, opened from
-a `>_` button next to each device (a square button at the left of each row on Android and on
-phones). It shows that device's MQTT messages, sent and received, with the time; telemetry can
-be hidden. The command line works like Tasmota's own console, with the device's own history
-under the arrows and five editable **favourite commands** shared by all devices (the default
-ones only read settings). Commands that change the Wi-Fi or MQTT connection, or reset the
-settings, ask first. Passwords are hidden in the log and never kept in the history; read-only
-mode shows the messages but sends nothing. Devices can also be **restarted** from the gear
-menu, the Wi-Fi networks window and the device sheet.
+- About offers a new version only when one is really newer; the release workflow publishes a
+  version only when every build (macOS, Windows, Linux, Android) succeeded.
+- The star of a just-plugged-in device goes by its uptime (see above), and devices that the
+  broker still calls "Online" but that don't answer stay hidden until they do.
 
-### Next: dashboard, group upgrades, your own firmware, devices without MQTT
+### 1.0.0: a console for each device
 
-- A **Dashboard** opens at every start: one card per device, big relay buttons, the light's
-  colour and the main values. Choosing the values on the cards comes later.
+The tool the original TDM had and this one was missing: a **console per device**. It shows that
+device's MQTT messages, sent and received, with the time (telemetry can be hidden), and a
+command line that works like Tasmota's own console, with the device's own history under the
+arrows and five editable **favourite commands** shared by all devices (the default ones only
+read settings). Commands that change the Wi-Fi or MQTT connection, or reset the settings,
+ask first, since a wrong value cuts the device off. Passwords are hidden in the log and never
+kept in the history; read-only mode shows the messages but sends nothing. Devices can also be
+**restarted** from their tools, after a confirmation.
+
+### 1.1.0: a new icon
+
+The app icon became the author's own house drawing: dark lines, an orange inside, on a blue
+tile, the same on the desktop, the web page, the website and Android (themed icon included).
+
+### 1.2.0: dashboard, group upgrades, your own firmware, devices without MQTT
+
+- A **Dashboard** opens at every start: one card per online device, big relay buttons, the
+  light's colour and the main values. Choosing the values on the cards comes later.
 - **Tick devices and upgrade them together**: each one on its own, at the same time; old
-  firmware follows the upgrade path by itself, and a failure stops only that device.
-- **Your own firmware**: a custom OTA server (`http://server/{build}.bin.gz`) or a highest
-  version on the official server (e.g. stay on 11.x), for every device or per device.
-- **Find devices on the network** over HTTP, also those without MQTT: they join the list marked
-  HTTP and work over HTTP; **Enable MQTT** sends them the broker settings in one go.
+  firmware follows the upgrade path step after step by itself, and a failure stops only that
+  device.
+- **Your own firmware**: a custom OTA server (`http://server/{build}.bin.gz`, where `{build}`
+  becomes the device's build) or a highest version on the official server (e.g. stay on 11.x),
+  for every device or per device.
+- **Find devices on the network** over HTTP, also those without MQTT. The range is filled in
+  from the network the app runs on (address and netmask). Only devices that answer as Tasmota
+  are added (Shelly, routers and other web servers are left out); they join the list marked
+  HTTP and work over HTTP, and **Enable MQTT** sends them the broker settings in one go.
+- Offline devices are hidden at every start; an offline device has a remove button in place of
+  its gear, and a device removed in one app disappears from the others at once.
+- The web server opens the page in the browser when it runs on a computer with a screen. On
+  Windows the desktop app uses the system's own fonts, sharper than its built-in one. The
+  desktop views became tabs on a row of their own.
 
-### Next: devices on custom MQTT topics
+### 1.3.0: devices on custom MQTT topics
 
-A user's devices live on topics like `headquarters/meeting-room-3/%prefix%/%topic%/` with
-`SetOption19 1` (Home Assistant discovery instead of `tasmota/discovery`): the app could not
-see them. Settings now take **FullTopic patterns** (`headquarters/+/%prefix%/%topic%/`, `+`
-for any one level) and **single devices** with their own FullTopic; the app listens to the
-LWT they imply and the devices work like any other (relays, console, upgrades).
+A user's devices lived on topics like `headquarters/meeting-room-3/%prefix%/%topic%/` and did
+not publish `tasmota/discovery` (`SetOption19 1`, or firmware older than 9.x): the app could
+not see them. Settings now take **FullTopic patterns** (`headquarters/+/%prefix%/%topic%/`,
+`+` for any one level, `%hostname%` or `%id%` in place of `%topic%`) and **single devices**
+with their own FullTopic. The app listens to the LWT they imply, learns each device's real
+FullTopic from it, and the devices then work like any other (relays, console, upgrades).
 
 ## What each version does today
 
@@ -204,12 +227,21 @@ decoding and safety rules are identical everywhere.
 
 ### Desktop app (Windows, macOS, Linux)
 
-- A dense, sortable table of every device, with the five views, customizable and reorderable
-  columns per view, search, and an offline filter. Click a device name to open its own web page.
+- Opens on the **Dashboard**: a card per online device with big relay buttons, the light's
+  colour (a click opens colour and brightness) and the main values.
+- A dense, sortable table of every device in five more views (Home, Health, Firmware, Wifi,
+  MQTT), as tabs on their own row, with customizable and reorderable columns per view, search,
+  and an offline filter (offline devices hidden at every start). Click a device name to open
+  its own web page.
 - Relay buttons and light controls (colour wheel and sliders) directly from the list.
-- A gear next to each device opens its tools: **SetOptions** editor, **Wi-Fi networks**,
-  **backup / restore** (backups go to Downloads; restore from that list or by dropping a file
-  on the window).
+- Before each name, always in the same place: a tick box, the signal, the gear (or, for an
+  offline device, a button that removes it) and the console. The gear opens the device's
+  tools: **SetOptions** editor, **Wi-Fi networks**, **backup / restore** (backups go to
+  Downloads; restore from that list or by dropping a file on the window), **firmware source**
+  and **restart**.
+- **Tick devices** to upgrade them together, or to connect the HTTP-only ones to MQTT.
+- **Find devices** on the network over HTTP; Tasmota devices without MQTT join the list marked
+  HTTP.
 - **Firmware** view: compares each device with the latest release or development build,
   offers the guided **upgrade path** for old firmware, the release/development switch and
   progress for the device being upgraded.
@@ -219,8 +251,9 @@ decoding and safety rules are identical everywhere.
 - A built-in **web server** you can start from the desktop app, so phones on the same network
   get the web version without a separate install; it asks whether to start it read-only or
   read-write.
-- Read-only checkbox (ticked at every start), Settings (theme, broker, web server HTTPS and
-  login), About window, notice and download link when a newer version is out.
+- Read-only checkbox (ticked at every start), Settings (theme, broker, custom MQTT topics,
+  firmware server and highest version, web server HTTPS and login), About window, notice and
+  download link when a newer version is out.
 - Single native executable; macOS as a regular `.app` in a `.dmg`, Windows as a plain `.exe`.
 
 ### Web version (any browser, desktop or phone)
@@ -228,14 +261,19 @@ decoding and safety rules are identical everywhere.
 - A standalone server for macOS, Windows and Linux in two programs, `tasmota-derust-web`
   (read-only) and `tasmota-derust-web-rw` (commands allowed), or the one built into the desktop
   app. Nothing to install on the devices that open it.
-- On a computer: the same table, views, column chooser and search as the desktop app.
-- On a phone: a layout of its own, with compact rows, a bottom navigation bar for the five
-  views, and a bottom sheet with everything about a device and its actions (relays, lights,
-  SetOptions, Wi-Fi networks, backup / restore, upgrade).
+- It opens the page in the default browser when it runs on a computer with a screen, and prints
+  the address (Ctrl-click, or Cmd-click on macOS); `--no-browser` for servers.
+- The same Dashboard first, then the same table, views, column chooser, search, tick boxes,
+  group upgrade, Find devices and Enable MQTT as the desktop app.
+- On a phone: a layout of its own, with dashboard cards and compact rows, a bottom navigation
+  bar for the views, a Select button for ticking devices, and a bottom sheet with everything
+  about a device and its actions (relays, lights, console, SetOptions, Wi-Fi networks, backup /
+  restore, restart, firmware source, upgrade).
 - Backups download through the browser and restores upload from it.
 - A **console** for each device, as on the desktop (full screen on phones).
 - A Settings button (a gear on phones): light / dark / system theme remembered per browser,
-  and what the server uses (broker, read-only, login, HTTPS). Release notes with the download
+  firmware server and highest version, and what the server uses (broker, custom MQTT topics,
+  read-only, login, HTTPS). Release notes with the download
   for the visitor's own system.
 - Optional login (stored only as a hash) and optional HTTPS on port 8443 with a self-signed
   certificate, both shared with the desktop app's server. Requests from other web sites and
@@ -246,12 +284,17 @@ decoding and safety rules are identical everywhere.
 
 - A native app (Kotlin and Jetpack Compose on top of the same Rust core), with Material You
   colours from the wallpaper and a light / dark / system theme setting.
-- The device list with the five views, search, sorting, offline filter and pull to refresh.
+- Opens on the **Dashboard**, a grid of cards with big relay buttons and light colours; then
+  the device list with five more views, search, sorting, offline filter (hidden at every
+  start) and pull to refresh.
 - Tap a device for its sheet: relays, colour and brightness for lights, Wi-Fi and firmware
-  details, the guided upgrade, SetOptions (full screen), Wi-Fi networks, and backup / restore
-  through Android's own save and open dialogs.
-- A square **console** button at the left of each row: the device's messages, a command line
-  with history arrows and the favourite commands.
+  details, the guided upgrade, SetOptions (full screen), Wi-Fi networks, backup / restore
+  through Android's own save and open dialogs, restart and firmware source.
+- In the sheet, a square **CLI** button beside the name opens the device's **console**: its
+  messages, a command line with history arrows and the favourite commands.
+- Icons in the toolbar to **find devices** on the network and to **tick devices** for a group
+  upgrade or Enable MQTT.
+- Settings: broker, custom MQTT topics, firmware server and highest version, theme.
 - A lock icon in the top bar for read-only mode, which turns back on at every launch.
 - Version and available update next to the title, with the release notes and a direct APK
   download.
