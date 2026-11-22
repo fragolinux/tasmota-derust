@@ -114,6 +114,11 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
     val files = rememberDeviceFiles(vm)
     var wifiTopic by rememberSaveable { mutableStateOf<String?>(null) }
     var restartTopic by rememberSaveable { mutableStateOf<String?>(null) }
+    var showFind by rememberSaveable { mutableStateOf(false) }
+    var showUpgradeMany by remember { mutableStateOf(false) }
+    var showEnableMqtt by remember { mutableStateOf(false) }
+    var otaTopic by rememberSaveable { mutableStateOf<String?>(null) }
+    var httpPwTopic by rememberSaveable { mutableStateOf<String?>(null) }
 
     // null: hidden; true: a command was blocked; false: the lock was tapped.
     var askUnlock by remember { mutableStateOf<Boolean?>(null) }
@@ -199,7 +204,38 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
             val offlineCount = snap?.devices?.count { it.isOffline } ?: 0
-            Toolbar(vm, offlineCount = offlineCount)
+            Toolbar(vm, offlineCount = offlineCount, onFind = { showFind = true })
+            if (vm.selecting) {
+                val ticked = snap?.devices.orEmpty().filter { it.topic in vm.selected }
+                val http = ticked.count { it.http != null }
+                androidx.compose.foundation.layout.FlowRow(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        "${ticked.size} ✓", fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.align(Alignment.CenterVertically).padding(end = 4.dp),
+                    )
+                    androidx.compose.material3.AssistChip(
+                        onClick = { if (vm.readOnly) vm.readOnlyHit() else showUpgradeMany = true },
+                        enabled = ticked.isNotEmpty(), label = { Text("Upgrade") },
+                    )
+                    androidx.compose.material3.AssistChip(
+                        onClick = { if (vm.readOnly) vm.readOnlyHit() else showEnableMqtt = true },
+                        enabled = http > 0, label = { Text("Enable MQTT ($http)") },
+                    )
+                    androidx.compose.material3.AssistChip(
+                        onClick = {
+                            vm.selectAll(
+                                snap?.devices.orEmpty().filter { vm.showOffline || it.online == true }.map { it.topic },
+                            )
+                        },
+                        label = { Text("All") },
+                    )
+                    androidx.compose.material3.AssistChip(onClick = vm::stopSelecting, label = { Text("Done") })
+                }
+            }
             if (vm.showOffline && offlineCount > 0) {
                 var ask by remember { mutableStateOf(false) }
                 TextButton(
@@ -245,11 +281,23 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
                             else -> "No devices match."
                         },
                     )
+                    vm.view == View.Dashboard -> Dashboard(
+                        // Quick controls: only devices that answer.
+                        devices = list.filter { it.online == true || it.upgrading },
+                        selecting = vm.selecting, selected = vm.selected,
+                        contentPadding = PaddingValues(bottom = 16.dp),
+                        onOpen = { openTopic = it.topic },
+                        onToggle = { d, n -> vm.togglePower(d.topic, n) },
+                        onLight = { openTopic = it.topic },
+                        onSelect = { d, on -> vm.select(d.topic, on) },
+                    )
                     else -> DeviceList(
                         snapshot = s, devices = list, view = vm.view,
                         contentPadding = PaddingValues(bottom = 16.dp),
                         onOpen = { openTopic = it.topic },
                         onToggle = { d, n -> vm.togglePower(d.topic, n) },
+                        selecting = vm.selecting, selected = vm.selected,
+                        onSelect = { d, on -> vm.select(d.topic, on) },
                     )
                 }
             }
@@ -277,6 +325,8 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             onForget = { vm.forget(open.topic) },
             onConsole = { vm.openConsole(open.topic) },
             onRestart = { restartTopic = open.topic },
+            onOta = { otaTopic = open.topic },
+            onHttpPassword = { httpPwTopic = open.topic },
             readOnly = vm.readOnly,
             onReadOnly = vm::readOnlyHit,
         )
@@ -322,6 +372,43 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
             onRestart = { restartTopic = wifiDevice.topic },
         )
     }
+    if (showFind) FindDialog(
+        search = s?.search, localRange = remember { dev.derust.tasmota.core.localRange() },
+        onSearch = { r, pw -> vm.search(r, pw) }, onDismiss = { showFind = false },
+    )
+    if (showUpgradeMany) UpgradeManyDialog(
+        devices = s?.devices.orEmpty().filter { it.topic in vm.selected },
+        onUpgrade = { vm.upgradeMany(it) }, onDismiss = { showUpgradeMany = false },
+    )
+    if (showEnableMqtt) {
+        val defaults = remember { vm.mqttDefaults() }
+        val http = s?.devices.orEmpty().filter { it.topic in vm.selected && it.http != null }
+        EnableMqttDialog(
+            devices = http, defaults = defaults,
+            onSend = { h, p, u, pw -> vm.enableMqtt(http.map { it.topic }, h, p, u, pw) },
+            onDismiss = { showEnableMqtt = false },
+        )
+    }
+    val otaDevice = s?.devices?.firstOrNull { it.topic == otaTopic }
+    if (otaTopic != null && otaDevice != null) {
+        OtaDeviceDialog(
+            name = otaDevice.name,
+            current = remember(otaTopic) { dev.derust.tasmota.core.otaDevice(otaDevice.topic) },
+            defaults = remember(otaTopic) { dev.derust.tasmota.core.otaDefault() },
+            onSave = { o ->
+                runCatching { dev.derust.tasmota.core.setOtaDevice(otaDevice.topic, o) }.exceptionOrNull()?.message
+            },
+            onDismiss = { otaTopic = null },
+        )
+    }
+    val pwDevice = s?.devices?.firstOrNull { it.topic == httpPwTopic }
+    if (httpPwTopic != null && pwDevice != null) {
+        HttpPasswordDialog(
+            address = pwDevice.http ?: pwDevice.topic,
+            onOk = { vm.setHttpPassword(pwDevice.topic, it) },
+            onDismiss = { httpPwTopic = null },
+        )
+    }
     val restartDevice = s?.devices?.firstOrNull { it.topic == restartTopic }
     if (restartTopic != null && restartDevice != null) {
         AlertDialog(
@@ -359,6 +446,7 @@ private fun MainScreen(vm: MainViewModel, onSettings: () -> Unit) {
 }
 
 private val View.icon get() = when (this) {
+    View.Dashboard -> Icons.Dashboard
     View.Home -> Icons.Home
     View.Health -> Icons.Health
     View.Firmware -> Icons.Firmware
@@ -392,7 +480,7 @@ private fun RowScope.ConnectionLine(connected: Boolean?, status: String?, readOn
 }
 
 @Composable
-private fun Toolbar(vm: MainViewModel, offlineCount: Int) {
+private fun Toolbar(vm: MainViewModel, offlineCount: Int, onFind: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -427,6 +515,16 @@ private fun Toolbar(vm: MainViewModel, offlineCount: Int) {
             selected = vm.showOffline, onClick = vm::toggleOffline,
             label = { Text("Offline $offlineCount") },
         )
+        IconButton(onClick = onFind, modifier = Modifier.size(36.dp)) { Icon(Icons.Find, "Find devices on the network") }
+        IconButton(
+            onClick = { if (vm.selecting) vm.stopSelecting() else vm.selecting = true },
+            modifier = Modifier.size(36.dp),
+        ) {
+            Icon(
+                Icons.Select, "Tick devices",
+                tint = if (vm.selecting) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+            )
+        }
         Box {
             var open by remember { mutableStateOf(false) }
             IconButton(onClick = { open = true }) { Icon(Icons.Sort, "Sort by ${vm.sort.title}") }

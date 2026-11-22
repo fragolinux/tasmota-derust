@@ -34,6 +34,14 @@ pub enum Action {
     Subscribe(String),
     /// Deletes a retained message on the broker (empty retained publish).
     ClearRetained(String),
+    /// A command to an HTTP-only device (`http_dev`): run it, then give the answer to
+    /// [`Store::handle_http`].
+    Http {
+        key: String,
+        host: String,
+        command: String,
+        password: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +68,9 @@ pub struct Upgrade {
     /// does not acknowledge them (it can miss commands right after it reconnects).
     pub commands: Vec<Action>,
     pub resent: bool,
+    /// Started for a group of devices: once a step of the upgrade path is done, the next one
+    /// starts by itself (see [`Store::continue_upgrades`]).
+    pub auto: bool,
 }
 
 /// Why an upgrade did not start.
@@ -69,8 +80,6 @@ pub enum StartError {
     Offline,
     /// Already upgrading this device.
     Running,
-    /// Another device is being upgraded: one at a time.
-    OtherRunning(String),
     /// The plan says no (too old, not enough flash, size not checked yet...).
     NotPossible(String),
 }
@@ -155,6 +164,12 @@ pub struct Device {
     /// Topics the broker keeps a retained message on for this device (LWT, discovery…):
     /// what [`Store::forget`] clears so a removed device does not come back.
     pub retained_topics: std::collections::BTreeSet<String>,
+    /// Reached over HTTP only (no MQTT): its address (`ip` or `ip:port`). See `http_dev`.
+    pub http_host: Option<String>,
+    /// Its web password, when it has one (memory only, never saved).
+    pub http_password: Option<String>,
+    /// It answered that it wants a web password.
+    pub http_locked: bool,
 }
 
 impl Device {
@@ -243,10 +258,14 @@ impl Device {
             .as_deref()
             .filter(|s| !s.is_empty())
             .or(self.friendly_name.as_deref().filter(|s| !s.is_empty()))
+            .or(self.http_host.as_deref())
             .unwrap_or(&self.topic)
     }
 
     pub fn web_url(&self) -> Option<String> {
+        if let Some(h) = &self.http_host {
+            return Some(format!("http://{h}/"));
+        }
         self.ip
             .as_deref()
             .filter(|ip| !ip.is_empty() && *ip != "0.0.0.0")
@@ -682,6 +701,12 @@ impl Store {
     pub fn handle_message(&mut self, topic: &str, payload: &str, retained: bool) -> Vec<Action> {
         let mut out = Vec::new();
 
+        // Another app (or the web server) removed an offline device: its retained messages
+        // are cleared with an empty payload, which reaches us too. Drop it here as well.
+        if payload.is_empty() && !retained && self.forgotten_elsewhere(topic) {
+            return out;
+        }
+
         if let Some(rest) = topic.strip_prefix("tasmota/discovery/") {
             if rest.ends_with("/config")
                 && let Some(key) = self.handle_discovery(payload, &mut out)
@@ -792,11 +817,45 @@ impl Store {
         out
     }
 
+    /// An empty message on a device's discovery config or LWT: it was removed elsewhere.
+    /// Only devices that are not answering are dropped (a live device never sends these).
+    fn forgotten_elsewhere(&mut self, topic: &str) -> bool {
+        let key = if let Some(mac) = topic
+            .strip_prefix("tasmota/discovery/")
+            .and_then(|r| r.strip_suffix("/config"))
+        {
+            let mac = format_mac(mac);
+            self.devices
+                .iter()
+                .find(|(_, d)| d.mac.as_deref() == Some(mac.as_str()))
+                .map(|(k, _)| k.clone())
+        } else if topic.ends_with("/LWT") {
+            self.devices
+                .iter()
+                .find(|(_, d)| {
+                    topic
+                        .strip_prefix(d.tele_prefix.as_str())
+                        .is_some_and(|s| s == "LWT")
+                })
+                .map(|(k, _)| k.clone())
+        } else {
+            None
+        };
+        let Some(key) = key else { return false };
+        if self.devices[&key].reachable() == Some(true) {
+            return false;
+        }
+        self.devices.remove(&key);
+        self.console.clear(&key);
+        true
+    }
+
     /// Removes a device that is not reachable, and clears the retained messages the broker
     /// keeps for it, or it would be listed again on the next connection. A device that comes
     /// back online announces itself again. `None`: unknown device or still reachable.
     pub fn forget(&mut self, key: &str) -> Option<Vec<Action>> {
-        if self.devices.get(key)?.reachable() != Some(false) {
+        let d = self.devices.get(key)?;
+        if d.reachable() != Some(false) && d.http_host.is_none() {
             return None;
         }
         let d = self.devices.remove(key)?;
@@ -892,6 +951,10 @@ impl Store {
         let Some(d) = self.devices.get(key) else {
             return;
         };
+        if d.http_host.is_some() {
+            out.extend(http_action(d, "Status 0"));
+            return;
+        }
         let mut send = |cmd: &str, payload: &str| {
             out.push(Action::Publish {
                 topic: d.cmnd(cmd),
@@ -930,6 +993,13 @@ impl Store {
     /// Records the commands among `actions` in the console of the device they go to.
     pub fn log_sent(&mut self, actions: &[Action]) {
         for a in actions {
+            if let Action::Http { key, host, command, .. } = a {
+                let (cmd, payload) = command.split_once(' ').unwrap_or((command, ""));
+                let topic = format!("http://{host}/cm {cmd}");
+                let masked = crate::console::mask(cmd, payload);
+                self.console.push(key, true, false, &topic, &masked);
+                continue;
+            }
             let Action::Publish { topic, payload } = a else {
                 continue;
             };
@@ -954,10 +1024,162 @@ impl Store {
         self.devices
             .get(key)
             .filter(|d| d.is_online())
-            .map(|d| Action::Publish {
-                topic: d.cmnd(cmd),
-                payload: payload.into(),
+            .and_then(|d| {
+                if d.http_host.is_some() {
+                    http_action(d, format!("{cmd} {payload}").trim())
+                } else {
+                    Some(Action::Publish {
+                        topic: d.cmnd(cmd),
+                        payload: payload.into(),
+                    })
+                }
             })
+    }
+
+    /// Adds (or updates) an HTTP-only device found by a search: `status` is its `Status 0`
+    /// answer, None when it wants a web password. Returns its key. A device already known
+    /// over MQTT (same MAC or address) is not added: None.
+    pub fn add_http(
+        &mut self,
+        host: &str,
+        status: Option<&Value>,
+        password: Option<&str>,
+    ) -> Option<String> {
+        let ip = host.split(':').next().unwrap_or(host);
+        let mac = status
+            .and_then(|v| v.get("StatusNET"))
+            .and_then(|n| n.get("Mac"))
+            .and_then(Value::as_str)
+            .map(format_mac);
+        let on_mqtt = self.devices.values().any(|d| {
+            d.http_host.is_none()
+                && (d.ip.as_deref() == Some(ip) && !host.contains(':')
+                    || mac.is_some() && d.mac == mac)
+        });
+        if on_mqtt {
+            return None;
+        }
+        let key = crate::http_dev::key(host);
+        let d = self.devices.entry(key.clone()).or_insert_with(|| {
+            let mut d = Device::new(&key, DEFAULT_FULLTOPIC, default_prefixes());
+            d.http_host = Some(host.to_string());
+            if !host.contains(':') {
+                d.ip = Some(host.to_string());
+            }
+            d
+        });
+        if let Some(p) = password.filter(|p| !p.is_empty()) {
+            d.http_password = Some(p.to_string());
+        }
+        match status {
+            Some(v) => {
+                d.http_locked = false;
+                d.online = Some(true);
+                d.answered = true;
+                d.parse_status(v);
+                d.status_seen = true;
+                if host.contains(':') {
+                    // Tests on one machine: keep the address with its port.
+                    d.ip = Some(host.to_string());
+                }
+            }
+            None => {
+                d.http_locked = true;
+                d.online = Some(true);
+                d.answered = true;
+            }
+        }
+        Some(key)
+    }
+
+    /// An HTTP-only device saved earlier, not asked yet (see [`Store::poll_http`]).
+    pub fn add_http_saved(&mut self, host: &str) {
+        let key = crate::http_dev::key(host);
+        self.devices.entry(key.clone()).or_insert_with(|| {
+            let mut d = Device::new(&key, DEFAULT_FULLTOPIC, default_prefixes());
+            d.http_host = Some(host.to_string());
+            d.ip = Some(host.to_string());
+            d
+        });
+    }
+
+    /// The answer to an [`Action::Http`]. Returns the device's address when it turned out
+    /// not to be a Tasmota (it is then removed: drop it from the saved list too).
+    pub fn handle_http(&mut self, key: &str, answer: &crate::http_dev::Answer) -> Option<String> {
+        use crate::http_dev::Answer;
+        if *answer == Answer::NotTasmota {
+            let d = self.devices.remove(key)?;
+            self.console.clear(key);
+            return d.http_host;
+        }
+        let Some(d) = self.devices.get_mut(key) else {
+            return None;
+        };
+        let topic = format!("http://{}/cm", d.http_host.clone().unwrap_or_default());
+        match answer {
+            Answer::Json(v) => {
+                self.console.push(key, false, false, &topic, &v.to_string());
+                d.online = Some(true);
+                d.answered = true;
+                d.http_locked = false;
+                if v.get("StatusFWR").is_some() || v.get("StatusSTS").is_some() {
+                    let port_host = d.http_host.clone().filter(|h| h.contains(':'));
+                    d.parse_status(v);
+                    d.status_seen = true;
+                    if let Some(h) = port_host {
+                        d.ip = Some(h);
+                    }
+                } else {
+                    d.parse_result(v, &mut self.ssids);
+                }
+            }
+            Answer::NeedsPassword => {
+                d.http_locked = true;
+                d.online = Some(true);
+                d.answered = true;
+            }
+            Answer::Nothing | Answer::NotTasmota => {
+                d.online = Some(false);
+                d.answered = false;
+            }
+        }
+        None
+    }
+
+    /// HTTP-only devices that now also talk MQTT (same MAC or address): removed, since the
+    /// MQTT entry takes over. Returns their addresses (to drop them from the saved list).
+    pub fn merge_http(&mut self) -> Vec<String> {
+        let gone: Vec<(String, String)> = self
+            .devices
+            .iter()
+            .filter_map(|(k, d)| {
+                let host = d.http_host.as_ref()?;
+                let ip = host.split(':').next().unwrap_or(host);
+                self.devices
+                    .values()
+                    .any(|m| {
+                        m.http_host.is_none()
+                            && m.is_online()
+                            && (d.mac.is_some() && m.mac == d.mac
+                                || !host.contains(':') && m.ip.as_deref() == Some(ip))
+                    })
+                    .then(|| (k.clone(), host.clone()))
+            })
+            .collect();
+        for (k, _) in &gone {
+            self.devices.remove(k);
+            self.console.clear(k);
+        }
+        gone.into_iter().map(|(_, h)| h).collect()
+    }
+
+    /// The `Status 0` poll of every HTTP-only device (online state, relays, telemetry).
+    pub fn poll_http(&self) -> Vec<Action> {
+        self.devices
+            .values()
+            .filter(|d| d.http_host.is_some())
+            .filter_map(|d| http_action(d, "Status 0"))
+            .collect()
     }
 
     /// What upgrading this device would do now (see `ota`).
@@ -971,27 +1193,21 @@ impl Store {
             .map(|d| crate::ota::plan_info(d, targets, &self.sizes))
     }
 
-    /// Starts the next upgrade (one step of the path, or the final one). Only one device at
-    /// a time, only online devices, only when the plan allows it (free flash checked).
+    /// Starts the next upgrade (one step of the path, or the final one). Devices upgrade on
+    /// their own, several at once; only online devices, only when the plan allows it (free
+    /// flash checked). `auto`: the following steps of the path start by themselves.
     pub fn start_upgrade(
         &mut self,
         key: &str,
         targets: &crate::ota::Targets,
+        auto: bool,
     ) -> Result<Vec<Action>, StartError> {
         let d = self.devices.get(key).ok_or(StartError::Unknown)?;
         if !d.is_online() {
             return Err(StartError::Offline);
         }
-        if let Some((other, _)) = self
-            .devices
-            .iter()
-            .find(|(_, d)| d.upgrade.as_ref().is_some_and(|u| u.is_active()))
-        {
-            return Err(if other == key {
-                StartError::Running
-            } else {
-                StartError::OtherRunning(self.devices[other].display_name().to_string())
-            });
+        if d.upgrade.as_ref().is_some_and(|u| u.is_active()) {
+            return Err(StartError::Running);
         }
         let info = crate::ota::plan_info(d, targets, &self.sizes);
         if !info.can_start {
@@ -1003,11 +1219,12 @@ impl Store {
                 .unwrap_or(info.title);
             return Err(StartError::NotPossible(why));
         }
-        let plan = crate::ota::plan(
+        let plan = crate::ota::plan_with(
             d.version.as_deref(),
             d.ota_url.as_deref(),
             crate::ota::esp32_build(d).as_deref(),
             targets.release.as_deref(),
+            &crate::ota_policy::policy(key),
         );
         let (target, step) = match plan {
             crate::ota::Plan::Step {
@@ -1039,8 +1256,44 @@ impl Store {
             step,
             commands: out.clone(),
             resent: false,
+            auto,
         });
         Ok(out)
+    }
+
+    /// Group upgrades: a device whose path step is done, back with a fresh status, starts its
+    /// next step (or the final upgrade). It stops after the final upgrade, on a failure, or
+    /// when the plan can't go on (it is then shown as usual).
+    pub fn continue_upgrades(&mut self, targets: &crate::ota::Targets) -> Vec<Action> {
+        let ready: Vec<String> = self
+            .devices
+            .iter()
+            .filter(|(_, d)| {
+                d.is_online()
+                    && d.status_seen
+                    && d.upgrade.as_ref().is_some_and(|u| {
+                        u.auto && u.target.is_some() && matches!(u.phase, UpgradePhase::Done(_))
+                    })
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        let mut out = Vec::new();
+        for k in ready {
+            let info = crate::ota::plan_info(&self.devices[&k], targets, &self.sizes);
+            if !matches!(info.kind, "step" | "final") {
+                if let Some(u) = self.devices.get_mut(&k).and_then(|d| d.upgrade.as_mut()) {
+                    u.auto = false;
+                }
+                continue;
+            }
+            if !info.can_start {
+                continue; // size or free flash still being checked: next round
+            }
+            if let Ok(a) = self.start_upgrade(&k, targets, true) {
+                out.extend(a);
+            }
+        }
+        out
     }
 
     /// Upgrade timeouts, and the status query asked again when it got no answer: Tasmota
@@ -1090,6 +1343,15 @@ impl Store {
         }
         out
     }
+}
+
+fn http_action(d: &Device, command: &str) -> Option<Action> {
+    Some(Action::Http {
+        key: d.topic.clone(),
+        host: d.http_host.clone()?,
+        command: command.to_string(),
+        password: d.http_password.clone(),
+    })
 }
 
 fn set_str(field: &mut Option<String>, v: &Value, key: &str) {
@@ -1289,7 +1551,7 @@ mod tests {
         assert!(!d.is_online());
         assert_eq!(d.reachable(), None, "still waiting for the answer");
         assert!(s.command("plug", "POWER1", "TOGGLE").is_none());
-        assert!(s.start_upgrade("plug", &Default::default()).is_err());
+        assert!(s.start_upgrade("plug", &Default::default(), false).is_err());
 
         s.devices.get_mut("plug").unwrap().asked = Some(long_ago(NO_ANSWER_AFTER * 2));
         let d = &s.devices["plug"];
@@ -1305,7 +1567,25 @@ mod tests {
     }
 
     #[test]
-    fn forget_offline_clears_retained() {
+    fn removed_elsewhere_goes_away() {
+        let mut s = Store::default();
+        s.handle_message(
+            "tasmota/discovery/AABBCCDDEEFF/config",
+            r#"{"t":"old","ft":"%prefix%/%topic%/","dn":"Old","mac":"AABBCCDDEEFF"}"#,
+            true,
+        );
+        s.handle_message("tele/old/LWT", "Offline", true);
+        s.handle("tele/live/LWT", "Online");
+        s.handle("stat/live/STATUS0", &status_fwr("15.0.0(tasmota)"));
+        // The empty messages another app sends when it removes them.
+        s.handle("tele/live/LWT", "");
+        assert!(s.devices.contains_key("live"), "a live device stays");
+        s.handle("tasmota/discovery/AABBCCDDEEFF/config", "");
+        assert!(!s.devices.contains_key("old"));
+    }
+
+    #[test]
+        fn forget_offline_clears_retained() {
         let mut s = Store::default();
         s.handle_message(
             "tasmota/discovery/AABBCCDDEEFF/config",
@@ -1379,7 +1659,7 @@ mod tests {
         let mut s = Store::default();
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("13.3.0(tasmota32)"));
-        assert!(s.start_upgrade("a8t", &Default::default()).is_ok());
+        assert!(s.start_upgrade("a8t", &Default::default(), false).is_ok());
         s.handle("tele/a8t/LWT", "Offline");
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("13.3.0(safeboot)"));
@@ -1401,7 +1681,7 @@ mod tests {
         let mut s = Store::default();
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("16.0.0(tasmota32)"));
-        s.start_upgrade("a8t", &Default::default()).unwrap();
+        s.start_upgrade("a8t", &Default::default(), false).unwrap();
         s.handle("tele/a8t/LWT", "Offline");
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("16.0.0(release-tasmota32)"));
@@ -1418,7 +1698,7 @@ mod tests {
         let mut s = Store::default();
         s.handle("tele/a8t/LWT", "Online");
         s.handle("stat/a8t/STATUS0", &status_fwr("13.3.0(tasmota32)"));
-        s.start_upgrade("a8t", &Default::default()).unwrap();
+        s.start_upgrade("a8t", &Default::default(), false).unwrap();
         s.devices
             .get_mut("a8t")
             .unwrap()
@@ -1475,6 +1755,7 @@ mod tests {
             step: Some((1, 4)),
             commands: Vec::new(),
             resent: false,
+            auto: false,
         });
         // Tasmota 6.x drops MQTT while it downloads and comes back, still on 6.7.1. Its
         // uptime is small (configured a minute ago) but longer than the upgrade has run.
@@ -1512,6 +1793,7 @@ mod tests {
             step: Some((1, 4)),
             commands: Vec::new(),
             resent: false,
+            auto: false,
         });
         s.handle(
             "tele/sw/INFO1",
@@ -1536,6 +1818,7 @@ mod tests {
             step: Some((1, 3)),
             commands: Vec::new(),
             resent: false,
+            auto: false,
         });
         s.handle("stat/sw/RESULT", r#"{"Upgrade":"Successful. Restarting"}"#);
         // Clean disconnect: no "Offline", the device is simply back with the new version.
@@ -1557,7 +1840,7 @@ mod tests {
         let mut s = Store::default();
         s.handle("tele/sw/LWT", "Online");
         s.handle("stat/sw/STATUS0", &status_fwr("16.0.0(tasmota)"));
-        let sent_first = s.start_upgrade("sw", &Default::default()).unwrap();
+        let sent_first = s.start_upgrade("sw", &Default::default(), false).unwrap();
         s.devices
             .get_mut("sw")
             .unwrap()
@@ -1595,6 +1878,7 @@ mod tests {
             step: Some((1, 4)),
             commands: Vec::new(),
             resent: false,
+            auto: false,
         });
         s.handle("tele/sw/LWT", "Online");
         // Only INFO1 arrives, the status query is lost.

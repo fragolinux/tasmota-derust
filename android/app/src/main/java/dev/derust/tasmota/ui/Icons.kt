@@ -62,6 +62,17 @@ object Icons {
         "M7 9.5l3 2.5-3 2.5", "M12.5 15H17",
     )
     val Up = lineIcon("up", "M6 15l6-6 6 6")
+    val Dashboard = lineIcon(
+        "dashboard",
+        "M5 3h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
+        "M15 3h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
+        "M5 13h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2z",
+        "M15 13h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2z",
+    )
+    /** Find devices on the network: a magnifier over waves. */
+    val Find = lineIcon("find", "M10 4a6 6 0 1 0 0 12a6 6 0 1 0 0-12z", "M20 20l-5.6-5.6", "M7.5 10a2.5 2.5 0 0 1 5 0")
+    /** Tick devices: a ticked box. */
+    val Select = lineIcon("select", "M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z", "M8 12l3 3 5-6")
     val Down = lineIcon("down", "M6 9l6 6 6-6")
     val Info = lineIcon("info", "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z", "M12 11v6", "M12 7.5v0.01")
     val External = lineIcon("external", "M14 4h6v6", "M20 4l-9 9", "M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5")

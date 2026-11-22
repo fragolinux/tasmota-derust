@@ -51,6 +51,9 @@ fun DeviceList(
     contentPadding: PaddingValues,
     onOpen: (Device) -> Unit,
     onToggle: (Device, Int) -> Unit,
+    selecting: Boolean = false,
+    selected: Set<String> = emptySet(),
+    onSelect: (Device, Boolean) -> Unit = { _, _ -> },
 ) {
     LazyColumn(contentPadding = contentPadding, modifier = Modifier.fillMaxWidth()) {
         viewInfo(snapshot, view)?.let { info ->
@@ -63,7 +66,10 @@ fun DeviceList(
             }
         }
         items(devices, key = { it.topic }) { d ->
-            DeviceRow(d, view, snapshot, onOpen = { onOpen(d) }, onToggle = { n -> onToggle(d, n) })
+            DeviceRow(
+                d, view, snapshot, onOpen = { onOpen(d) }, onToggle = { n -> onToggle(d, n) },
+                selecting = selecting, isSelected = d.topic in selected, onSelect = { onSelect(d, it) },
+            )
             HorizontalDivider(Modifier.padding(start = 46.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         }
     }
@@ -71,6 +77,7 @@ fun DeviceList(
 
 /** A line above the list: the two Wi-Fi networks, or the latest Tasmota release. */
 private fun viewInfo(s: Snapshot, view: View): String? = when (view) {
+    View.Dashboard -> null
     View.Wifi -> listOfNotNull(s.ssid1?.let { "1: $it" }, s.ssid2?.let { "2: $it" }).joinToString("   ").ifEmpty { null }
     View.Firmware -> s.latest?.let { "Latest release: $it" + (s.latestDev?.let { d -> " · development: $d" } ?: "") }
         ?: if (s.latestError != null) "Latest release unknown" else "Checking latest release…"
@@ -82,7 +89,10 @@ private val NewTint = Color(0xFFF2C21B).copy(alpha = 0.22f)
 private val StarColor = Color(0xFFF2B01B)
 
 @Composable
-private fun DeviceRow(d: Device, view: View, s: Snapshot, onOpen: () -> Unit, onToggle: (Int) -> Unit) {
+private fun DeviceRow(
+    d: Device, view: View, s: Snapshot, onOpen: () -> Unit, onToggle: (Int) -> Unit,
+    selecting: Boolean, isSelected: Boolean, onSelect: (Boolean) -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth()
             .background(if (d.new) NewTint else Color.Transparent)
@@ -92,10 +102,12 @@ private fun DeviceRow(d: Device, view: View, s: Snapshot, onOpen: () -> Unit, on
             .padding(start = 16.dp, end = 12.dp, top = 7.dp, bottom = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (selecting) androidx.compose.material3.Checkbox(isSelected, onSelect, Modifier.size(32.dp))
         SignalBars(d)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (d.http != null) { HttpChip(); Spacer(Modifier.width(6.dp)) }
                 if (d.new) Text(
                     "★ ", color = StarColor, style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.semantics { contentDescription = "Started in the last 5 minutes" },
@@ -122,7 +134,7 @@ private fun DeviceRow(d: Device, view: View, s: Snapshot, onOpen: () -> Unit, on
 private fun subtitle(d: Device, view: View): String {
     if (d.isOffline) return listOfNotNull(d.offlineLabel, d.module).joinToString(" · ")
     return when (view) {
-        View.Home -> listOfNotNull(d.module, d.telemetry ?: d.uptime?.let { "up " + fmtShort(it) })
+        View.Dashboard, View.Home -> listOfNotNull(d.module, d.telemetry ?: d.uptime?.let { "up " + fmtShort(it) })
         View.Health -> listOfNotNull(d.restartReason, d.bootCount?.let { "$it boots" })
         View.Firmware -> listOfNotNull(d.module, d.core?.let { "core $it" })
         View.Wifi -> listOfNotNull(d.ip, d.ssid)
@@ -134,7 +146,7 @@ private fun subtitle(d: Device, view: View): String {
 private fun RowEnd(d: Device, view: View, s: Snapshot, onToggle: (Int) -> Unit) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     when (view) {
-        View.Home -> {
+        View.Dashboard, View.Home -> {
             d.light?.let {
                 Box(Modifier.size(18.dp).background(swatchColor(it.swatch), RoundedCornerShape(4.dp)))
             }

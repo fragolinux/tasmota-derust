@@ -82,6 +82,8 @@ fun DeviceSheet(
     onForget: () -> Unit,
     onConsole: () -> Unit,
     onRestart: () -> Unit,
+    onOta: () -> Unit,
+    onHttpPassword: () -> Unit,
     /** Read-only mode (app-wide). Commands stay tappable and explain why nothing happens. */
     readOnly: Boolean,
     onReadOnly: () -> Unit,
@@ -104,6 +106,7 @@ fun DeviceSheet(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         SignalBars(d)
                         Spacer(Modifier.width(10.dp))
+                        if (d.http != null) { HttpChip(); Spacer(Modifier.width(6.dp)) }
                         Text(
                             d.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
@@ -154,6 +157,8 @@ fun DeviceSheet(
                     OutlinedButton(onClick = { if (readOnly) onReadOnly() else onRestart() }, enabled = canCommand) {
                         Text("Restart")
                     }
+                    OutlinedButton(onClick = onOta) { Text("Firmware source") }
+                    if (d.httpLocked) OutlinedButton(onClick = onHttpPassword) { Text("Web password") }
                 }
                 val plan = d.upgradePlan
                 if (!d.upgradeBusy && d.canSwitchChannel) {

@@ -29,7 +29,6 @@ pub enum CommandError {
     NoSuchRelay,
     BadAp,
     UpgradeRunning,
-    OtherUpgradeRunning,
     UpgradeNotPossible,
     NotOfficialOtaUrl,
     NotALight,
@@ -38,6 +37,8 @@ pub enum CommandError {
     NotOffline,
     Wifi(tasmota_derust_core::wifi::WifiError),
     Console(tasmota_derust_core::console::ConsoleError),
+    NotHttp,
+    BadMqttSettings,
 }
 
 impl CommandError {
@@ -50,7 +51,6 @@ impl CommandError {
             CommandError::NoSuchRelay => E::NoSuchRelay,
             CommandError::BadAp => E::BadAp,
             CommandError::UpgradeRunning => E::UpgradeRunning,
-            CommandError::OtherUpgradeRunning => E::OtherUpgradeRunning,
             CommandError::UpgradeNotPossible => E::UpgradeNotPossible,
             CommandError::NotOfficialOtaUrl => E::NotOfficialOtaUrl,
             CommandError::NotALight => E::NotALight,
@@ -59,6 +59,8 @@ impl CommandError {
             CommandError::NotOffline => E::NotOffline,
             CommandError::Wifi(w) => E::Wifi(*w),
             CommandError::Console(c) => E::Console(*c),
+            CommandError::NotHttp => E::NotHttp,
+            CommandError::BadMqttSettings => E::BadMqttSettings,
         }
     }
 }
@@ -81,7 +83,6 @@ impl From<session::CommandError> for CommandError {
             E::NoSuchRelay => CommandError::NoSuchRelay,
             E::BadAp => CommandError::BadAp,
             E::UpgradeRunning => CommandError::UpgradeRunning,
-            E::OtherUpgradeRunning => CommandError::OtherUpgradeRunning,
             E::UpgradeNotPossible => CommandError::UpgradeNotPossible,
             E::NotOfficialOtaUrl => CommandError::NotOfficialOtaUrl,
             E::NotALight => CommandError::NotALight,
@@ -90,6 +91,8 @@ impl From<session::CommandError> for CommandError {
             E::NotOffline => CommandError::NotOffline,
             E::Wifi(w) => CommandError::Wifi(w),
             E::Console(c) => CommandError::Console(c),
+            E::NotHttp => CommandError::NotHttp,
+            E::BadMqttSettings => CommandError::BadMqttSettings,
         }
     }
 }
@@ -126,7 +129,7 @@ pub struct Favourite {
 /// Call once at start.
 #[uniffi::export]
 pub fn set_data_dir(path: String) {
-    tasmota_derust_core::console::set_dir(path.into());
+    tasmota_derust_core::set_data_dir(path.into());
 }
 
 /// The favourite console commands: always 5 slots, an empty command is an unused slot.
@@ -232,6 +235,12 @@ pub struct Device {
     pub ssid1: Option<String>,
     pub ssid2: Option<String>,
     pub light: Option<Light>,
+    /// Reached over HTTP only (no MQTT): its address.
+    pub http: Option<String>,
+    /// HTTP-only and it wants a web password.
+    pub http_locked: bool,
+    /// Its own firmware server / highest version.
+    pub ota_own: bool,
 }
 
 /// A dimmable / CCT / RGB light.
@@ -282,6 +291,122 @@ pub struct Snapshot {
     pub ssid1: Option<String>,
     pub ssid2: Option<String>,
     pub devices: Vec<Device>,
+    /// The network search, when one was started.
+    pub search: Option<Search>,
+}
+
+#[derive(uniffi::Record)]
+pub struct Search {
+    pub running: bool,
+    pub done: u32,
+    pub total: u32,
+    pub tasmota: u32,
+    pub added: u32,
+}
+
+/// A device that did not start (group upgrade, Enable MQTT), and why.
+#[derive(uniffi::Record)]
+pub struct Failure {
+    pub topic: String,
+    pub error: String,
+}
+
+/// This app's broker, offered by Enable MQTT.
+#[derive(uniffi::Record)]
+pub struct MqttDefaults {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub has_password: bool,
+    pub loopback: bool,
+}
+
+/// Firmware server and highest version: for every device (strings, empty = official /
+/// latest), or one device's exception (null = use the default).
+#[derive(uniffi::Record)]
+pub struct OtaDefault {
+    pub custom_url: String,
+    pub max_version: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct OtaDevice {
+    pub custom_url: Option<String>,
+    pub max_version: Option<String>,
+}
+
+#[derive(Debug, uniffi::Error)]
+#[uniffi(flat_error)]
+pub enum SettingsError {
+    Invalid(String),
+}
+
+impl std::fmt::Display for SettingsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SettingsError::Invalid(m) => f.write_str(m),
+        }
+    }
+}
+
+impl std::error::Error for SettingsError {}
+
+fn ota_err(e: tasmota_derust_core::ota_policy::OtaError) -> SettingsError {
+    SettingsError::Invalid(e.message().into())
+}
+
+#[uniffi::export]
+pub fn ota_default() -> OtaDefault {
+    let o = tasmota_derust_core::ota_policy::default_settings();
+    OtaDefault {
+        custom_url: o.custom_url,
+        max_version: o.max_version,
+    }
+}
+
+#[uniffi::export]
+pub fn set_ota_default(o: OtaDefault) -> Result<(), SettingsError> {
+    tasmota_derust_core::ota_policy::set_default(tasmota_derust_core::ota_policy::OtaSettings {
+        custom_url: o.custom_url,
+        max_version: o.max_version,
+    })
+    .map_err(ota_err)
+}
+
+#[uniffi::export]
+pub fn ota_device(topic: String) -> OtaDevice {
+    let o = tasmota_derust_core::ota_policy::device(&topic);
+    OtaDevice {
+        custom_url: o.custom_url,
+        max_version: o.max_version,
+    }
+}
+
+#[uniffi::export]
+pub fn set_ota_device(topic: String, o: OtaDevice) -> Result<(), SettingsError> {
+    tasmota_derust_core::ota_policy::set_device(
+        &topic,
+        tasmota_derust_core::ota_policy::DeviceOta {
+            custom_url: o.custom_url,
+            max_version: o.max_version,
+        },
+    )
+    .map_err(ota_err)
+}
+
+/// The phone's own network (what an empty search range means), e.g. "192.168.1.0/24".
+#[uniffi::export]
+pub fn local_range() -> Option<String> {
+    tasmota_derust_core::http_dev::local_range()
+}
+
+fn failures(v: Vec<(String, session::CommandError)>) -> Vec<Failure> {
+    v.into_iter()
+        .map(|(topic, e)| Failure {
+            topic,
+            error: e.message().into(),
+        })
+        .collect()
 }
 
 impl From<session::DeviceInfo> for Device {
@@ -350,6 +475,9 @@ impl From<session::DeviceInfo> for Device {
             has_options: d.has_options,
             ssid1: d.ssid1,
             ssid2: d.ssid2,
+            http: d.http,
+            http_locked: d.http_locked,
+            ota_own: d.ota_own,
             up_to_date: d.up_to_date,
             upgrade_plan: UpgradePlan {
                 kind: d.upgrade_plan.kind.to_string(),
@@ -407,6 +535,13 @@ impl Session {
             ssid1,
             ssid2,
             devices: s.devices.into_iter().map(Device::from).collect(),
+            search: s.search.map(|x| Search {
+                running: x.running,
+                done: x.done as u32,
+                total: x.total as u32,
+                tasmota: x.tasmota as u32,
+                added: x.added as u32,
+            }),
         }
     }
 
@@ -467,6 +602,49 @@ impl Session {
 
     pub fn upgrade(&self, topic: String) -> Result<(), CommandError> {
         Ok(self.inner.upgrade(&topic)?)
+    }
+
+    /// Upgrades several devices at once, each on its own (the path steps follow by themselves).
+    pub fn upgrade_many(&self, topics: Vec<String>) -> Vec<Failure> {
+        failures(self.inner.upgrade_many(&topics))
+    }
+
+    /// Searches the network over HTTP (read-only); progress in `snapshot().search`.
+    pub fn search(&self, range: String, password: Option<String>) -> Result<(), SettingsError> {
+        self.inner
+            .search(&range, password.filter(|p| !p.is_empty()))
+            .map_err(|e| SettingsError::Invalid(e.message().into()))
+    }
+
+    /// The web password of an HTTP-only device (memory only).
+    pub fn set_http_password(&self, topic: String, password: String) -> Result<(), CommandError> {
+        Ok(self.inner.set_http_password(&topic, &password)?)
+    }
+
+    pub fn mqtt_defaults(&self) -> MqttDefaults {
+        let d = self.inner.broker_settings();
+        MqttDefaults {
+            host: d.host,
+            port: d.port,
+            user: d.user,
+            has_password: d.has_password,
+            loopback: d.loopback,
+        }
+    }
+
+    /// Connects HTTP-only devices to the broker. `password` null: the app's own.
+    pub fn enable_mqtt(
+        &self,
+        topics: Vec<String>,
+        host: String,
+        port: u16,
+        user: String,
+        password: Option<String>,
+    ) -> Vec<Failure> {
+        failures(
+            self.inner
+                .enable_mqtt(&topics, &host, port, &user, password.as_deref()),
+        )
     }
 
     /// Light brightness 0..100.

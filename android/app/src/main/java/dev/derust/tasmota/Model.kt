@@ -2,8 +2,9 @@ package dev.derust.tasmota
 
 import dev.derust.tasmota.core.Device
 
-/** The five views, the same as the desktop app and the web page. */
+/** The views, the same as the desktop app and the web page. */
 enum class View(val title: String, val sorts: List<SortKey>) {
+    Dashboard("Dashboard", listOf(SortKey.Name, SortKey.Module, SortKey.Uptime, SortKey.Rssi)),
     Home("Home", listOf(SortKey.Name, SortKey.Module, SortKey.Uptime, SortKey.Rssi)),
     Health("Health", listOf(SortKey.Name, SortKey.Uptime, SortKey.BootCount, SortKey.RestartReason, SortKey.LoadAvg, SortKey.Rssi)),
     Firmware("Firmware", listOf(SortKey.Name, SortKey.Version, SortKey.Core, SortKey.Module)),

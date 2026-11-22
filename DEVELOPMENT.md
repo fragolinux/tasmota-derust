@@ -183,6 +183,9 @@ reports. The `.dmg` is made with `hdiutil`, so the macOS desktop app is packed o
 (among them an ESP32 that upgrades through safeboot, an unplugged plug with a stale
 "Online" LWT, and an ESP8266 on 6.7.1 with about 1 MB of flash that follows the whole
 upgrade path, minimal images included, plus an RGBCCT and a CCT bulb). It refuses any broker that is not on this computer.
+Three more devices are **HTTP-only** (MQTT off) on `127.0.0.1:18081-18083` (the last one has
+the web password `secret`): search the range `127.0.0.1:18081-18083` with Find…, then Enable
+MQTT makes them join the local broker. From the Android emulator, `adb reverse` those ports too.
 It answers the read queries and the
 commands (relays, AP switch, upgrade), so every screen can be tried safely:
 
@@ -195,6 +198,9 @@ Then point the app at `127.0.0.1`, port `1884`. From the Android emulator the co
 `10.0.2.2`; from a phone on USB, `adb reverse tcp:1884 tcp:1884` and use `127.0.0.1`.
 
 ## Ideas for later (TODO)
+
+- Dashboard: let the user choose which values each card shows (today: power and
+  temperature from telemetry, or the uptime).
 
 - Backups: a local database of every device's configuration dumps, versioned (keep the
   history, compare two versions) and taken on a schedule; for now backup and restore are

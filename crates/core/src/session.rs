@@ -21,6 +21,9 @@ use crate::mqtt::{Mqtt, MqttEvent};
 
 struct Shared {
     store: Store,
+    /// The network search running now, or the last one.
+    search: Option<crate::http_dev::Search>,
+    search_found: usize,
     connected: bool,
     status: String,
 }
@@ -31,8 +34,9 @@ pub struct Session {
     latest: Arc<Mutex<Latest>>,
     latest_dev: Arc<Mutex<Latest>>,
     app_latest: Arc<Mutex<Latest>>,
-    read_only: AtomicBool,
+    read_only: Arc<AtomicBool>,
     broker: String,
+    broker_cfg: BrokerConfig,
     notify: Notify,
 }
 
@@ -44,7 +48,6 @@ pub enum CommandError {
     NoSuchRelay,
     BadAp,
     UpgradeRunning,
-    OtherUpgradeRunning,
     UpgradeNotPossible,
     NotOfficialOtaUrl,
     NotALight,
@@ -55,6 +58,10 @@ pub enum CommandError {
     NotOffline,
     Wifi(crate::wifi::WifiError),
     Console(crate::console::ConsoleError),
+    /// "Enable MQTT" sent to a device that already uses MQTT.
+    NotHttp,
+    /// "Enable MQTT" without a broker address (or with a `;`).
+    BadMqttSettings,
 }
 
 impl CommandError {
@@ -66,7 +73,6 @@ impl CommandError {
             CommandError::NoSuchRelay => "No such relay.",
             CommandError::BadAp => "AP must be 1 or 2.",
             CommandError::UpgradeRunning => "An upgrade is already running on this device.",
-            CommandError::OtherUpgradeRunning => "Another device is being upgraded: one at a time.",
             CommandError::UpgradeNotPossible => {
                 "This upgrade can't start now: see the upgrade details."
             }
@@ -81,6 +87,10 @@ impl CommandError {
             CommandError::NotOffline => "Only offline devices can be removed.",
             CommandError::Wifi(e) => e.message(),
             CommandError::Console(e) => e.message(),
+            CommandError::NotHttp => "This device already uses MQTT.",
+            CommandError::BadMqttSettings => {
+                "Give the broker address the devices can reach (and no ';' in the settings)."
+            }
         }
     }
 }
@@ -99,17 +109,32 @@ impl Session {
     pub fn start(broker: &BrokerConfig, read_only: bool, notify: Notify) -> Session {
         let (mqtt, rx) = Mqtt::start(broker, notify.clone());
         let mqtt = Arc::new(mqtt);
+        let mut store = Store::default();
+        for h in crate::http_dev::saved() {
+            store.add_http_saved(&h);
+        }
+        let first_poll = store.poll_http();
         let shared = Arc::new(Mutex::new(Shared {
-            store: Store::default(),
+            store,
+            search: None,
+            search_found: 0,
             connected: false,
             status: "Connecting…".into(),
         }));
 
-        // MQTT events -> device store. Only the read queries produced by the store are sent here.
+        let latest = github::fetch_latest(notify.clone());
+        let latest_dev = github::fetch_latest_dev(notify.clone());
+        let read_only = Arc::new(AtomicBool::new(read_only));
+
+        // MQTT events -> device store. Only the read queries produced by the store are sent here,
+        // plus the next steps of group upgrades (never in read-only mode).
         // The thread ends when the MQTT connection is dropped.
         {
             let shared = shared.clone();
             let mqtt = Arc::downgrade(&mqtt);
+            let (latest, latest_dev, read_only, notify) =
+                (latest.clone(), latest_dev.clone(), read_only.clone(), notify.clone());
+            let mut http_polled = std::time::Instant::now();
             std::thread::Builder::new()
                 .name("session".into())
                 .spawn(move || {
@@ -137,7 +162,7 @@ impl Session {
                                     }
                                 };
                                 match mqtt.upgrade() {
-                                    Some(m) => run_actions(&shared, &m, actions),
+                                    Some(m) => run_actions(&shared, &m, actions, &notify),
                                     None => break,
                                 }
                             }
@@ -148,24 +173,42 @@ impl Session {
                             }
                             Err(RecvTimeoutError::Disconnected) => break,
                         }
-                        let actions = shared.lock().unwrap().store.check_timeouts();
+                        let (mut actions, gone) = {
+                            let mut s = shared.lock().unwrap();
+                            (s.store.check_timeouts(), s.store.merge_http())
+                        };
+                        // HTTP-only devices that now talk MQTT: the MQTT entry takes over.
+                        for h in gone {
+                            crate::http_dev::forget(&h);
+                        }
+                        // HTTP-only devices: asked for their status every minute.
+                        if http_polled.elapsed() >= Duration::from_secs(60) {
+                            http_polled = std::time::Instant::now();
+                            actions.extend(shared.lock().unwrap().store.poll_http());
+                        }
+                        if !read_only.load(Ordering::SeqCst) {
+                            let targets = targets_of(&latest, &latest_dev);
+                            actions.extend(shared.lock().unwrap().store.continue_upgrades(&targets));
+                        }
                         if let Some(m) = mqtt.upgrade() {
-                            run_actions(&shared, &m, actions);
+                            run_actions(&shared, &m, actions, &notify);
                         }
                     }
                 })
                 .expect("spawn session thread");
         }
 
+        run_actions(&shared, &mqtt, first_poll, &notify);
         Session {
             shared,
             mqtt,
-            latest: github::fetch_latest(notify.clone()),
-            latest_dev: github::fetch_latest_dev(notify.clone()),
+            latest,
+            latest_dev,
             app_latest: github::fetch_app_latest(notify.clone()),
             notify,
-            read_only: AtomicBool::new(read_only),
+            read_only,
             broker: format!("{}:{}", broker.host.trim(), broker.port),
+            broker_cfg: broker.clone(),
         }
     }
 
@@ -187,6 +230,7 @@ impl Session {
             Latest::Loading => (None, None),
         };
         let targets = self.targets();
+        let search = self.search_state();
         // One lock at a time: two guards of the same mutex in one expression deadlock.
         let (app_update, app_latest) = {
             let l = self.app_latest.lock().unwrap();
@@ -203,11 +247,7 @@ impl Session {
             .values()
             .map(|d| {
                 let plan = crate::ota::plan_info(d, &targets, &s.store.sizes);
-                let status = crate::ota::version_status(
-                    d.version.as_deref(),
-                    d.ota_url.as_deref(),
-                    &targets,
-                );
+                let status = crate::ota::device_status(d, &targets);
                 DeviceInfo::new(d, status, plan)
             })
             .collect();
@@ -225,6 +265,7 @@ impl Session {
             latest_error,
             ssids: s.store.ssids.clone(),
             devices,
+            search,
         }
     }
 
@@ -232,7 +273,7 @@ impl Session {
     /// SSId), so this is allowed in read-only mode too.
     pub fn refresh(&self) {
         let actions = self.shared.lock().unwrap().store.refresh_all();
-        run_actions(&self.shared, &self.mqtt, actions);
+        run_actions(&self.shared, &self.mqtt, actions, &self.notify);
     }
 
     /// Removes an offline device from the list and clears its retained messages on the
@@ -248,7 +289,10 @@ impl Session {
             }
             s.store.forget(topic).ok_or(CommandError::NotOffline)?
         };
-        run_actions(&self.shared, &self.mqtt, actions);
+        if let Some(h) = crate::http_dev::host_of_key(topic) {
+            crate::http_dev::forget(h);
+        }
+        run_actions(&self.shared, &self.mqtt, actions, &self.notify);
         (self.notify)();
         Ok(())
     }
@@ -278,9 +322,137 @@ impl Session {
             (n, actions)
         };
         let (n, actions) = actions;
-        run_actions(&self.shared, &self.mqtt, actions);
+        run_actions(&self.shared, &self.mqtt, actions, &self.notify);
         (self.notify)();
         Ok(n)
+    }
+
+    /// Searches the local network for Tasmota devices over HTTP (read-only: `Status 0` to
+    /// every address). `range`: empty for this network (see `http_dev::hosts`). Devices not
+    /// on MQTT are added to the list as HTTP-only, and remembered.
+    pub fn search(
+        &self,
+        range: &str,
+        password: Option<String>,
+    ) -> Result<(), crate::http_dev::ScanError> {
+        let hosts = crate::http_dev::hosts(range)?;
+        let search = crate::http_dev::Search {
+            total: hosts.len(),
+            ..Default::default()
+        };
+        let (done, result) = (search.done.clone(), search.result.clone());
+        {
+            let mut s = self.shared.lock().unwrap();
+            if s.search.as_ref().is_some_and(|x| x.result.lock().unwrap().is_none()) {
+                return Ok(()); // one at a time
+            }
+            s.search = Some(search);
+            s.search_found = 0;
+        }
+        let (shared, notify) = (self.shared.clone(), self.notify.clone());
+        std::thread::spawn(move || {
+            let found = crate::http_dev::scan(&hosts, password.as_deref(), &done);
+            let mut added = 0;
+            {
+                let mut s = shared.lock().unwrap();
+                for f in &found {
+                    if s.store.add_http(&f.host, f.status.as_ref(), password.as_deref()).is_some() {
+                        crate::http_dev::remember(&f.host);
+                        added += 1;
+                    }
+                }
+                s.search_found = added;
+            }
+            *result.lock().unwrap() = Some(found);
+            notify();
+        });
+        Ok(())
+    }
+
+    /// Progress of the network search: None before the first one.
+    pub fn search_state(&self) -> Option<SearchInfo> {
+        let s = self.shared.lock().unwrap();
+        let x = s.search.as_ref()?;
+        let result = x.result.lock().unwrap();
+        Some(SearchInfo {
+            running: result.is_none(),
+            done: x.done.load(Ordering::Relaxed).min(x.total),
+            total: x.total,
+            tasmota: result.as_ref().map(Vec::len).unwrap_or(0),
+            added: s.search_found,
+        })
+    }
+
+    /// The web password of an HTTP-only device that asked for one (memory only); it is asked
+    /// for its status again.
+    pub fn set_http_password(&self, key: &str, password: &str) -> Result<(), CommandError> {
+        let actions = {
+            let mut s = self.shared.lock().unwrap();
+            let d = s.store.devices.get_mut(key).ok_or(CommandError::UnknownDevice)?;
+            if d.http_host.is_none() {
+                return Err(CommandError::UnknownDevice);
+            }
+            d.http_password = Some(password.to_string()).filter(|p| !p.is_empty());
+            s.store.poll_http().into_iter().filter(|a| matches!(a, Action::Http { key: k, .. } if k == key)).collect::<Vec<_>>()
+        };
+        run_actions(&self.shared, &self.mqtt, actions, &self.notify);
+        Ok(())
+    }
+
+    /// This app's broker (host, port, user, whether it has a password): what "Enable MQTT"
+    /// offers by default. The password itself never leaves the session.
+    pub fn broker_settings(&self) -> MqttDefaults {
+        let b = &self.broker_cfg;
+        let host = b.host.trim().to_string();
+        MqttDefaults {
+            loopback: matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1"),
+            host,
+            port: b.port,
+            user: b.username.clone(),
+            has_password: !b.password.is_empty(),
+        }
+    }
+
+    /// Connects HTTP-only devices to the MQTT broker: `Backlog SetOption3 1; MqttHost …;
+    /// MqttPort …; MqttUser …; MqttPassword …` over HTTP (they restart). They then show up
+    /// over MQTT and their HTTP entry goes away. Returns the ones that were not sent, and why.
+    pub fn enable_mqtt(
+        &self,
+        keys: &[String],
+        host: &str,
+        port: u16,
+        user: &str,
+        password: Option<&str>,
+    ) -> Vec<(String, CommandError)> {
+        // None: the app's own broker password.
+        let password = password.unwrap_or(&self.broker_cfg.password);
+        let Some(line) = crate::http_dev::mqtt_backlog(host, port, user, password) else {
+            return keys
+                .iter()
+                .map(|k| (k.clone(), CommandError::BadMqttSettings))
+                .collect();
+        };
+        let payload = line.trim_start_matches("Backlog ").to_string();
+        let mut errors = Vec::new();
+        let mut actions = Vec::new();
+        {
+            let s = self.shared.lock().unwrap();
+            for k in keys {
+                let r = self.guard(&s, k).and_then(|()| {
+                    if s.store.devices.get(k).is_some_and(|d| d.http_host.is_some()) {
+                        s.store.command(k, "Backlog", &payload).ok_or(CommandError::Offline)
+                    } else {
+                        Err(CommandError::NotHttp)
+                    }
+                });
+                match r {
+                    Ok(a) => actions.push(a),
+                    Err(e) => errors.push((k.clone(), e)),
+                }
+            }
+        }
+        run_actions(&self.shared, &self.mqtt, actions, &self.notify);
+        errors
     }
 
     /// Checks that a state-changing command is allowed for this device.
@@ -311,7 +483,7 @@ impl Session {
             }
             s.store.command(topic, &format!("POWER{n}"), "TOGGLE")
         };
-        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect(), &self.notify);
         Ok(())
     }
 
@@ -325,28 +497,40 @@ impl Session {
             self.guard(&s, topic)?;
             s.store.command(topic, "AP", &n.to_string())
         };
-        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect(), &self.notify);
         Ok(())
     }
 
     /// Starts the next upgrade of one device: one step of the upgrade path for old firmware,
-    /// or the upgrade to the latest release (see `ota`). One device at a time.
+    /// or the upgrade to the latest release (see `ota`). Devices upgrade independently.
     pub fn upgrade(&self, topic: &str) -> Result<(), CommandError> {
+        self.upgrade_with(topic, false)
+    }
+
+    /// Starts the upgrade of several devices at once, each on its own; the steps of the
+    /// upgrade path follow by themselves. Returns the devices that did not start, and why.
+    pub fn upgrade_many(&self, topics: &[String]) -> Vec<(String, CommandError)> {
+        topics
+            .iter()
+            .filter_map(|t| self.upgrade_with(t, true).err().map(|e| (t.clone(), e)))
+            .collect()
+    }
+
+    fn upgrade_with(&self, topic: &str, auto: bool) -> Result<(), CommandError> {
         let targets = self.targets();
         let actions = {
             let mut s = self.shared.lock().unwrap();
             self.guard(&s, topic)?;
             s.store
-                .start_upgrade(topic, &targets)
+                .start_upgrade(topic, &targets, auto)
                 .map_err(|e| match e {
                     StartError::Unknown => CommandError::UnknownDevice,
                     StartError::Offline => CommandError::Offline,
                     StartError::Running => CommandError::UpgradeRunning,
-                    StartError::OtherRunning(_) => CommandError::OtherUpgradeRunning,
                     StartError::NotPossible(_) => CommandError::UpgradeNotPossible,
                 })?
         };
-        run_actions(&self.shared, &self.mqtt, actions);
+        run_actions(&self.shared, &self.mqtt, actions, &self.notify);
         Ok(())
     }
 
@@ -400,7 +584,7 @@ impl Session {
             }
             s.store.command(topic, cmd, &payload)
         };
-        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect(), &self.notify);
         Ok(())
     }
 
@@ -411,7 +595,7 @@ impl Session {
             self.guard(&s, topic)?;
             s.store.command(topic, "RESTART", "1")
         };
-        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect(), &self.notify);
         Ok(())
     }
 
@@ -433,7 +617,7 @@ impl Session {
                 .ok_or(CommandError::NotOfficialOtaUrl)?;
             s.store.command(topic, "OTAURL", &url)
         };
-        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect(), &self.notify);
         Ok(())
     }
 
@@ -464,7 +648,7 @@ impl Session {
                 s.store.command(topic, "STATUS", "3"),
             ]
         };
-        run_actions(&self.shared, &self.mqtt, actions.into_iter().flatten().collect());
+        run_actions(&self.shared, &self.mqtt, actions.into_iter().flatten().collect(), &self.notify);
         Ok(())
     }
 
@@ -489,7 +673,7 @@ impl Session {
                 crate::wifi::command(slot, d.ap, ssid, password).map_err(CommandError::Wifi)?;
             s.store.command(topic, "BACKLOG", &payload)
         };
-        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect(), &self.notify);
         Ok(())
     }
 
@@ -557,25 +741,29 @@ impl Session {
             s.store.command(topic, &cmd, &payload)
         };
         crate::console::remember(topic, line);
-        run_actions(&self.shared, &self.mqtt, action.into_iter().collect());
+        run_actions(&self.shared, &self.mqtt, action.into_iter().collect(), &self.notify);
         Ok(())
     }
 
     fn targets(&self) -> crate::ota::Targets {
-        let get = |l: &Mutex<Latest>| match &*l.lock().unwrap() {
-            Latest::Ok(v) => Some(v.clone()),
-            _ => None,
-        };
-        crate::ota::Targets {
-            release: get(&self.latest),
-            development: get(&self.latest_dev),
-        }
+        targets_of(&self.latest, &self.latest_dev)
     }
 }
 
-/// Sends the actions; the commands also go to the console of their device. The caller must
-/// not hold the lock.
-fn run_actions(shared: &Mutex<Shared>, mqtt: &Mqtt, actions: Vec<Action>) {
+fn targets_of(latest: &Mutex<Latest>, dev: &Mutex<Latest>) -> crate::ota::Targets {
+    let get = |l: &Mutex<Latest>| match &*l.lock().unwrap() {
+        Latest::Ok(v) => Some(v.clone()),
+        _ => None,
+    };
+    crate::ota::Targets {
+        release: get(latest),
+        development: get(dev),
+    }
+}
+
+/// Sends the actions; the commands also go to the console of their device. HTTP commands run
+/// on their own thread and their answers update the store. The caller must not hold the lock.
+fn run_actions(shared: &Arc<Mutex<Shared>>, mqtt: &Mqtt, actions: Vec<Action>, notify: &Notify) {
     if actions.is_empty() {
         return;
     }
@@ -585,11 +773,55 @@ fn run_actions(shared: &Mutex<Shared>, mqtt: &Mqtt, actions: Vec<Action>) {
             Action::Publish { topic, payload } => mqtt.publish(&topic, &payload),
             Action::Subscribe(topic) => mqtt.subscribe(&topic),
             Action::ClearRetained(topic) => mqtt.clear_retained(&topic),
+            Action::Http {
+                key,
+                host,
+                command,
+                password,
+            } => {
+                let (shared, notify) = (shared.clone(), notify.clone());
+                std::thread::spawn(move || {
+                    let answer = crate::http_dev::command(&host, &command, password.as_deref());
+                    let gone = {
+                        let mut s = shared.lock().unwrap();
+                        let mut gone = s.store.merge_http();
+                        gone.extend(s.store.handle_http(&key, &answer));
+                        gone
+                    };
+                    for h in gone {
+                        crate::http_dev::forget(&h);
+                    }
+                    notify();
+                });
+            }
         }
     }
 }
 
 // --------------------------------------------------------------------- snapshot
+
+/// The app's broker, offered by "Enable MQTT".
+#[derive(Serialize, Clone, Debug)]
+pub struct MqttDefaults {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub has_password: bool,
+    /// 127.0.0.1 / localhost: right for this app, wrong for the devices.
+    pub loopback: bool,
+}
+
+/// The network search, for a progress bar.
+#[derive(Serialize, Clone, Debug)]
+pub struct SearchInfo {
+    pub running: bool,
+    pub done: usize,
+    pub total: usize,
+    /// Tasmota devices that answered.
+    pub tasmota: usize,
+    /// Of those, added to the list (not already on MQTT).
+    pub added: usize,
+}
 
 #[derive(Serialize, Clone, Debug)]
 pub struct ConsoleView {
@@ -670,6 +902,12 @@ pub struct DeviceInfo {
     /// This device's own SSId1 / SSId2.
     pub ssid1: Option<String>,
     pub ssid2: Option<String>,
+    /// Reached over HTTP only (no MQTT): its address.
+    pub http: Option<String>,
+    /// HTTP-only and it wants a web password.
+    pub http_locked: bool,
+    /// Its own firmware server / highest version (not the default): see `ota_policy`.
+    pub ota_own: bool,
 }
 
 /// A light, as the front ends draw it.
@@ -730,6 +968,8 @@ pub struct Snapshot {
     pub latest_error: Option<String>,
     pub ssids: [Option<String>; 2],
     pub devices: Vec<DeviceInfo>,
+    /// The network search (HTTP), when one was started.
+    pub search: Option<SearchInfo>,
 }
 
 impl DeviceInfo {
@@ -802,6 +1042,9 @@ impl DeviceInfo {
             has_options: !d.set_options.is_empty(),
             ssid1: d.ssids[0].clone(),
             ssid2: d.ssids[1].clone(),
+            http: d.http_host.clone(),
+            http_locked: d.http_locked,
+            ota_own: crate::ota_policy::policy(&d.topic).own,
             upgrade: d.upgrade.as_ref().map(|u| {
                 let (state, text) = match &u.phase {
                     UpgradePhase::Sent => ("sent", "Command sent…".to_string()),

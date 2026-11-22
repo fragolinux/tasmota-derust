@@ -129,6 +129,9 @@ fun SettingsScreen(
             )
 
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            FirmwareSettings()
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Text("Appearance", style = MaterialTheme.typography.titleMedium)
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 ThemeMode.entries.forEachIndexed { i, t ->
@@ -272,3 +275,35 @@ fun ChangelogDialog(version: String, onClose: () -> Unit) {
         },
     )
 }
+
+/** Firmware server and highest version for every device (a device's sheet can differ). */
+@Composable
+private fun FirmwareSettings() {
+    val current = remember { dev.derust.tasmota.core.otaDefault() }
+    var url by rememberSaveable { mutableStateOf(current.customUrl) }
+    var max by rememberSaveable { mutableStateOf(current.maxVersion) }
+    var msg by remember { mutableStateOf<String?>(null) }
+    Text("Firmware", style = MaterialTheme.typography.titleMedium)
+    OutlinedTextField(
+        url, { url = it; msg = null }, singleLine = true, label = { Text("Firmware server") },
+        placeholder = { Text("http://server/{build}.bin.gz") },
+        supportingText = { Text("Empty: the official server") }, modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        max, { max = it; msg = null }, singleLine = true, label = { Text("Highest version") },
+        placeholder = { Text("e.g. 11.1.0") },
+        supportingText = { Text("Empty: the latest (official server only)") }, modifier = Modifier.fillMaxWidth(),
+    )
+    Text(
+        "For every device; a device's Firmware source can differ. {build} becomes the device's build " +
+            "(tasmota, tasmota-sensors, tasmota32c3…). The version on your own server can't be checked: " +
+            "upgrades install what it serves.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    androidx.compose.material3.OutlinedButton(onClick = {
+        msg = runCatching { dev.derust.tasmota.core.setOtaDefault(dev.derust.tasmota.core.OtaDefault(url, max)) }
+            .exceptionOrNull()?.message ?: "Saved"
+    }) { Text("Save firmware settings") }
+    msg?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+}
+

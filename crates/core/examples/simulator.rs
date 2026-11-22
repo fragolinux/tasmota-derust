@@ -10,10 +10,16 @@
 //!   "Old switch"     ESP8266 on 6.7.1 with ~1 MB flash: follows OtaUrl, refuses .gz before
 //!                    8.2, goes through <name>-minimal when the image does not fit
 //!
+//!   HTTP-only devices on 127.0.0.1:18081-18083 (no MQTT until they get its settings), and a
+//!                    non-Tasmota web server on 18084 that answers 401 like a Shelly: for
+//!                    the network search, use the range 127.0.0.1:18081-18083; the one on
+//!                    18083 has the web password "secret"
+//!
 //! Safety: it refuses any broker that is not on this machine (127.0.0.1 / ::1 / localhost),
 //! so it can never publish fake states or answers on a real home broker.
 
-use std::net::ToSocketAddrs;
+use std::io::{BufRead, BufReader, Write};
+use std::net::{TcpListener, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -21,7 +27,13 @@ use std::time::{Duration, Instant};
 use rumqttc::{Client, Event, MqttOptions, Packet, QoS};
 use serde_json::{Value, json};
 
+#[derive(Clone)]
 struct Fake {
+    /// Talks MQTT (false: HTTP-only until it gets broker settings).
+    mqtt: bool,
+    /// Its web server on 127.0.0.1 (HTTP-only devices).
+    http_port: Option<u16>,
+    web_password: Option<&'static str>,
     topic: &'static str,
     name: &'static str,
     module: &'static str,
@@ -127,6 +139,11 @@ const SSIDS: [&str; 2] = ["Home-Main", "Home-Extender"];
 
 #[allow(clippy::type_complexity)]
 fn devices() -> Vec<Fake> {
+    devices_mqtt_template().into_iter().chain(http_devices()).collect()
+}
+
+#[allow(clippy::type_complexity)]
+fn devices_mqtt_template() -> Vec<Fake> {
     let list: &[(
         &str,
         &str,
@@ -315,6 +332,9 @@ fn devices() -> Vec<Fake> {
         .map(
             |(i, &(topic, name, module, relays, rssi, ap, version, online, reason, up, sensor))| {
                 Fake {
+                    mqtt: true,
+                    http_port: None,
+                    web_password: None,
                     topic,
                     name,
                     module,
@@ -393,6 +413,30 @@ fn devices() -> Vec<Fake> {
             },
         )
         .collect()
+}
+
+/// Devices with MQTT off, reached over HTTP only (made from the "Kitchen light" and "Desk
+/// lamp" fakes).
+fn http_devices() -> Vec<Fake> {
+    let base = devices_mqtt_template();
+    let make = |from: &str, topic: &'static str, name: &'static str, port: u16, mac: &str, pw| {
+        let mut f = base.iter().find(|f| f.topic == from).cloned().expect("template");
+        f.mqtt = false;
+        f.http_port = Some(port);
+        f.web_password = pw;
+        f.topic = topic;
+        f.name = name;
+        f.mac = mac.into();
+        f.ip = format!("10.99.0.{}", 100 + port % 100);
+        f.online = true;
+        f.stale_lwt = false;
+        f
+    };
+    vec![
+        make("cucina", "http_presa", "Porch socket (HTTP)", 18081, "AA:BB:CC:00:00:81", None),
+        make("lampada", "http_lampada", "Studio lamp (HTTP)", 18082, "AA:BB:CC:00:00:82", None),
+        make("cucina", "http_protetto", "Locked plug (HTTP)", 18083, "AA:BB:CC:00:00:83", Some("secret")),
+    ]
 }
 
 impl Fake {
@@ -573,7 +617,7 @@ fn main() {
         thread::spawn(move || {
             loop {
                 thread::sleep(Duration::from_secs(15));
-                for f in fakes.lock().unwrap().iter().filter(|f| f.online) {
+                for f in fakes.lock().unwrap().iter().filter(|f| f.online && f.mqtt) {
                     publish(
                         &client,
                         format!("tele/{}/STATE", f.topic),
@@ -593,6 +637,25 @@ fn main() {
         });
     }
 
+    // Not a Tasmota: a web server with a login, answering 401 to everything (like a Shelly).
+    thread::spawn(|| {
+        let Ok(l) = TcpListener::bind(("127.0.0.1", 18084)) else { return };
+        for conn in l.incoming().flatten() {
+            let mut r = BufReader::new(&conn);
+            let mut line = String::new();
+            while r.read_line(&mut line).is_ok_and(|n| n > 2) {
+                line.clear();
+            }
+            let mut w = &conn;
+            let _ = write!(w, "HTTP/1.1 401 Unauthorized\r\nContent-Length: 16\r\nConnection: close\r\n\r\n401 Unauthorized");
+        }
+    });
+    for f in fakes.lock().unwrap().iter() {
+        if let Some(p) = f.http_port {
+            let (client, fakes, topic) = (client.clone(), fakes.clone(), f.topic);
+            thread::spawn(move || http_server(p, client, fakes, topic));
+        }
+    }
     println!(
         "Simulating {} devices on {host}:{port}",
         fakes.lock().unwrap().len()
@@ -601,7 +664,7 @@ fn main() {
         match ev {
             Ok(Event::Incoming(Packet::ConnAck(_))) => {
                 let _ = client.try_subscribe("cmnd/+/+", QoS::AtMostOnce);
-                for f in fakes.lock().unwrap().iter() {
+                for f in fakes.lock().unwrap().iter().filter(|f| f.mqtt) {
                     publish(
                         &client,
                         format!("tasmota/discovery/{}/config", f.mac.replace(':', "")),
@@ -654,7 +717,7 @@ fn handle(client: &Client, fakes: &Arc<Mutex<Vec<Fake>>>, topic: &str, cmd: &str
     let mut all = fakes.lock().unwrap();
     let Some(f) = all
         .iter_mut()
-        .find(|f| f.topic == topic && f.online && f.deaf_until.is_none_or(|t| Instant::now() >= t))
+        .find(|f| f.topic == topic && f.online && f.mqtt && f.deaf_until.is_none_or(|t| Instant::now() >= t))
     else {
         return;
     };
@@ -951,3 +1014,131 @@ fn restart_now(
     pub_(format!("tele/{topic}/INFO1"), info1.to_string(), false);
     pub_(format!("tele/{topic}/STATE"), f.state().to_string(), false);
 }
+
+// ------------------------------------------------------------------ HTTP-only devices
+
+fn url_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'%' if i + 2 < b.len() => {
+                if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                    out.push(v);
+                    i += 3;
+                    continue;
+                }
+                out.push(b'%');
+            }
+            b'+' => out.push(b' '),
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A tiny Tasmota web server: `/cm?cmnd=…` for Status, Power and the MQTT settings.
+fn http_server(port: u16, client: Client, fakes: Arc<Mutex<Vec<Fake>>>, topic: &'static str) {
+    let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) else {
+        eprintln!("HTTP {port}: port busy");
+        return;
+    };
+    println!("HTTP-only device {topic} on http://127.0.0.1:{port}/");
+    for conn in listener.incoming().flatten() {
+        let mut reader = BufReader::new(&conn);
+        let mut first = String::new();
+        if reader.read_line(&mut first).is_err() {
+            continue;
+        }
+        // Skip the headers.
+        let mut line = String::new();
+        while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+            line.clear();
+        }
+        let path = first.split_whitespace().nth(1).unwrap_or("/").to_string();
+        let query = path.split_once('?').map(|(_, q)| q).unwrap_or("");
+        let param = |k: &str| {
+            query
+                .split('&')
+                .find_map(|kv| kv.strip_prefix(&format!("{k}=")).map(url_decode))
+        };
+        let (code, body) = http_answer(&client, &fakes, topic, param("cmnd"), param("password"));
+        let mut w = &conn;
+        let _ = write!(
+            w,
+            "HTTP/1.1 {code}\r\nServer: Tasmota/16.0.0 (ESP8266EX)\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+    }
+}
+
+fn http_answer(
+    client: &Client,
+    fakes: &Arc<Mutex<Vec<Fake>>>,
+    topic: &'static str,
+    cmnd: Option<String>,
+    password: Option<String>,
+) -> (&'static str, String) {
+    let mut all = fakes.lock().unwrap();
+    let Some(f) = all.iter_mut().find(|f| f.topic == topic && f.online) else {
+        return ("503 Service Unavailable", "{}".into());
+    };
+    if let Some(pw) = f.web_password
+        && password.as_deref() != Some(pw)
+    {
+        return (
+            "401 Unauthorized",
+            json!({"WARNING": "Need user=<username>&password=<password>"}).to_string(),
+        );
+    }
+    let Some(cmnd) = cmnd else {
+        return ("200 OK", "{}".into());
+    };
+    println!("<- http {topic} {}", tasmota_derust_core::wifi::mask_passwords(&cmnd));
+    let (cmd, payload) = cmnd.split_once(' ').unwrap_or((&cmnd, ""));
+    let (cmd, payload) = (cmd.to_ascii_uppercase(), payload.trim().to_string());
+    let body = match cmd.as_str() {
+        "STATUS" => f.status0(),
+        c if c.starts_with("POWER") => {
+            let i = c[5..].parse::<usize>().unwrap_or(1).saturating_sub(1);
+            if i >= f.relays {
+                return ("200 OK", json!({"Command": "Unknown"}).to_string());
+            }
+            f.power[i] = match payload.to_ascii_uppercase().as_str() {
+                "ON" | "1" => true,
+                "OFF" | "0" => false,
+                "TOGGLE" | "2" => !f.power[i],
+                _ => f.power[i],
+            };
+            json!({ f.power_key(i): if f.power[i] { "ON" } else { "OFF" } })
+        }
+        "BACKLOG" if payload.to_ascii_uppercase().contains("MQTTHOST") => {
+            // Like Tasmota: the new broker settings take effect after a restart; then it
+            // shows up on MQTT.
+            let (client, fakes) = (client.clone(), fakes.clone());
+            thread::spawn(move || {
+                thread::sleep(Duration::from_secs(3));
+                let mut all = fakes.lock().unwrap();
+                let Some(f) = all.iter_mut().find(|f| f.topic == topic) else { return };
+                f.mqtt = true;
+                f.started = Instant::now();
+                f.uptime_base = 0;
+                f.boot_count += 1;
+                f.restart_reason = "Software/System restart";
+                let pub_ = |t: String, p: String, r: bool| {
+                    let _ = client.try_publish(t, QoS::AtMostOnce, r, p.into_bytes());
+                };
+                pub_(format!("tasmota/discovery/{}/config", f.mac.replace(':', "")), f.discovery().to_string(), true);
+                pub_(format!("tele/{topic}/LWT"), "Online".into(), true);
+                pub_(format!("tele/{topic}/STATE"), f.state().to_string(), false);
+                println!("{topic}: MQTT on");
+            });
+            json!({"SetOption3": "ON", "MqttHost": "set", "Restart": "Restarting"})
+        }
+        _ => json!({"Command": "Unknown"}),
+    };
+    ("200 OK", body.to_string())
+}
+

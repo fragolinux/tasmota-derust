@@ -163,7 +163,7 @@ impl Default for Config {
     fn default() -> Self {
         let mut c = Self {
             broker: BrokerConfig::default(),
-            show_offline: true,
+            show_offline: false,
             view: View::Home,
             columns: BTreeMap::new(),
             theme: "system".into(),

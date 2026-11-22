@@ -87,9 +87,15 @@ decisions behind it, and what each one does **not** protect against. They follow
 |---|---|---|
 | `config.json` | broker host, port, user, **password**; web login user and **password hash**; HTTPS on/off; theme, columns | broker password in **plain text**; web password only as a hash |
 | `web-cert.pem` | the self-signed certificate (public) | none needed |
+| `ota.json` | firmware server URL and highest version, the default and per device | plain text, no secrets |
+| `http_devices.json` | addresses of the devices reached over HTTP only | plain text; their web passwords are never saved |
 | `console.json` | console command history per device, the five favourite commands | plain text; commands with a password never enter the history, favourites are saved as typed |
 | `web-key.pem` | its private key, not encrypted | file permissions: owner only on macOS/Linux (0600); on Windows the user profile's ACLs (the user, SYSTEM, administrators) |
 
+- **Enable MQTT** sends the broker settings, password included, to devices over plain HTTP
+  (Tasmota has no HTTPS), like Tasmota's own web page does; by default it uses the app's own
+  broker password, which the web page never receives (the server fills it in). The network
+  search only reads (`Status 0` to each address); web passwords given for it stay in memory.
 - Nothing is encrypted on disk. Anything running as your user (or an administrator, or
   someone with your disk or a backup of it) can read these files. The web password hash does
   not let them log in; the **broker password** does let them connect to your broker.

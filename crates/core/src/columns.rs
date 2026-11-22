@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum View {
+    /// Big buttons and the main values of every device (no table).
+    Dashboard,
     Home,
     Health,
     Firmware,
@@ -12,7 +14,8 @@ pub enum View {
 }
 
 impl View {
-    pub const ALL: [View; 5] = [
+    pub const ALL: [View; 6] = [
+        View::Dashboard,
         View::Home,
         View::Health,
         View::Firmware,
@@ -22,6 +25,7 @@ impl View {
 
     pub fn label(self) -> &'static str {
         match self {
+            View::Dashboard => "Dashboard",
             View::Home => "Home",
             View::Health => "Health",
             View::Firmware => "Firmware",
@@ -33,6 +37,7 @@ impl View {
     pub fn default_columns(self) -> &'static [Col] {
         use Col::*;
         match self {
+            View::Dashboard => &[],
             View::Home => &[Power, Telemetry, Module, Uptime, Rssi],
             View::Health => &[
                 Uptime,

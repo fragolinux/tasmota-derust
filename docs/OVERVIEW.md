@@ -178,6 +178,17 @@ settings, ask first. Passwords are hidden in the log and never kept in the histo
 mode shows the messages but sends nothing. Devices can also be **restarted** from the gear
 menu, the Wi-Fi networks window and the device sheet.
 
+### Next: dashboard, group upgrades, your own firmware, devices without MQTT
+
+- A **Dashboard** opens at every start: one card per device, big relay buttons, the light's
+  colour and the main values. Choosing the values on the cards comes later.
+- **Tick devices and upgrade them together**: each one on its own, at the same time; old
+  firmware follows the upgrade path by itself, and a failure stops only that device.
+- **Your own firmware**: a custom OTA server (`http://server/{build}.bin.gz`) or a highest
+  version on the official server (e.g. stay on 11.x), for every device or per device.
+- **Find devices on the network** over HTTP, also those without MQTT: they join the list marked
+  HTTP and work over HTTP; **Enable MQTT** sends them the broker settings in one go.
+
 ## What each version does today
 
 All three share the same Rust core, so device handling, discovery, upgrade logic, SetOption

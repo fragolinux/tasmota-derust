@@ -21,6 +21,7 @@ use std::thread;
 use serde::Serialize;
 
 use crate::device::{Device, parse_version, short_version};
+use crate::ota_policy::Policy;
 
 pub const OTA_BASE: &str = "http://ota.tasmota.com/tasmota/";
 /// Same server, ESP32 images (`.bin` only).
@@ -242,7 +243,13 @@ pub enum Plan {
         set_url: Option<String>,
         index: usize,
         total: usize,
+        /// The image comes from the user's own server (`ota_policy`): version unknown.
+        custom: bool,
+        /// Stops at this release (the highest version set in `ota_policy`).
+        pinned: Option<[u32; 3]>,
     },
+    /// Already at (or above) the highest version set for it: nothing to do.
+    Pinned([u32; 3]),
 }
 
 /// `latest`: the latest release, to know whether the 16.0.0 milestone is needed.
@@ -252,6 +259,19 @@ pub fn plan(
     ota_url: Option<&str>,
     esp32: Option<&str>,
     latest: Option<&str>,
+) -> Plan {
+    plan_with(version, ota_url, esp32, latest, &Policy::default())
+}
+
+/// [`plan`] with the device's firmware server and highest version (`ota_policy`). A custom
+/// server replaces the final image (the path steps still come from the official server);
+/// the highest version applies to the official server only.
+pub fn plan_with(
+    version: Option<&str>,
+    ota_url: Option<&str>,
+    esp32: Option<&str>,
+    latest: Option<&str>,
+    policy: &Policy,
 ) -> Plan {
     let Some(version) = version else {
         return Plan::Unknown;
@@ -272,9 +292,31 @@ pub fn plan(
             fmt_ver(OLDEST_OTA)
         ));
     }
-    let remaining: Vec<&PathStep> = PATH.iter().filter(|s| s.version > v).collect();
+    let cap = if policy.custom_url.is_some() {
+        None
+    } else {
+        policy.max
+    };
+    if let Some(c) = cap
+        && v >= c
+    {
+        return Plan::Pinned(c);
+    }
+    // The cap replaces the latest release when it is lower (or the latest is not known).
+    let capped: Option<String> = match (cap, latest.and_then(parse_version)) {
+        (Some(c), Some(l)) if ver3(&l) > c => Some(fmt_ver(c)),
+        (Some(c), None) => Some(fmt_ver(c)),
+        _ => None,
+    };
+    let latest = capped.as_deref().or(latest);
+    let remaining: Vec<&PathStep> = PATH
+        .iter()
+        .filter(|s| s.version > v && cap.is_none_or(|c| s.version <= c))
+        .collect();
     let milestone = needs_milestone(&full, latest);
-    let total = remaining.len() + usize::from(milestone) + 1;
+    // A cap equal to a path step ends the path there: no final upgrade after it.
+    let final_needed = cap.is_none_or(|c| remaining.last().is_none_or(|s| s.version < c));
+    let total = remaining.len() + usize::from(milestone) + usize::from(final_needed);
     if let Some(step) = remaining.first() {
         let gz_ok = [v[0], v[1]] >= GZ_SINCE;
         let file = match step.file_gz {
@@ -313,6 +355,33 @@ pub fn plan(
             milestone: true,
         };
     }
+    if let Some(tpl) = &policy.custom_url {
+        let build = esp32.map(str::to_string).unwrap_or_else(|| final_build(version));
+        return Plan::Final {
+            set_url: Some(crate::ota_policy::fill(tpl, &build)),
+            index: 1,
+            total: 1,
+            custom: true,
+            pinned: None,
+        };
+    }
+    if let (Some(c), Some(_)) = (cap, &capped) {
+        let url = match esp32 {
+            Some(b) => format!("{OTA_BASE32}release-{}/{b}.bin", fmt_ver(c)),
+            None => format!(
+                "{OTA_BASE}release-{}/{}.bin.gz",
+                fmt_ver(c),
+                final_build(version)
+            ),
+        };
+        return Plan::Final {
+            set_url: Some(url),
+            index: 1,
+            total: 1,
+            custom: false,
+            pinned: Some(c),
+        };
+    }
     let own_ok = ota_url
         .is_some_and(|u| !u.trim().is_empty() && !is_path_url(u) && !u.contains("thehackbox.org"));
     let set_url = if own_ok {
@@ -328,6 +397,8 @@ pub fn plan(
         set_url,
         index: 1,
         total: 1,
+        custom: false,
+        pinned: None,
     }
 }
 
@@ -410,6 +481,47 @@ pub struct VersionStatus {
     pub outdated: bool,
     /// Newer than its channel's latest: going back (e.g. development → release).
     pub downgrade: bool,
+}
+
+/// [`version_status`] with the device's own firmware server and highest version.
+pub fn device_status(d: &Device, targets: &Targets) -> VersionStatus {
+    status_with(
+        d.version.as_deref(),
+        d.ota_url.as_deref(),
+        targets,
+        &crate::ota_policy::policy(&d.topic),
+    )
+}
+
+/// Like [`version_status`]; a custom server means "unknown", a highest version lowers the
+/// target (a device at or above it is up to date).
+pub fn status_with(
+    version: Option<&str>,
+    ota_url: Option<&str>,
+    targets: &Targets,
+    policy: &Policy,
+) -> VersionStatus {
+    if policy.custom_url.is_some() {
+        return VersionStatus::default();
+    }
+    let mut st = version_status(version, ota_url, targets);
+    if let Some(c) = policy.max {
+        let cap = fmt_ver(c);
+        let lower = st
+            .target
+            .as_deref()
+            .and_then(norm)
+            .is_none_or(|t| norm(&cap).is_some_and(|c| c < t));
+        if lower {
+            st.target = Some(cap.clone());
+        }
+        if let (Some(v), Some(t)) = (version.and_then(norm), st.target.as_deref().and_then(norm)) {
+            st.up_to_date = v >= t;
+            st.outdated = v < t;
+            st.downgrade = false;
+        }
+    }
+    st
 }
 
 pub fn version_status(
@@ -550,7 +662,8 @@ fn kb(bytes: u64) -> u64 {
 pub fn plan_info(d: &Device, targets: &Targets, sizes: &Sizes) -> PlanInfo {
     let build32 = esp32_build(d);
     let esp32 = build32.is_some();
-    let status = version_status(d.version.as_deref(), d.ota_url.as_deref(), targets);
+    let policy = crate::ota_policy::policy(&d.topic);
+    let status = status_with(d.version.as_deref(), d.ota_url.as_deref(), targets, &policy);
     let current = d
         .version
         .as_deref()
@@ -559,12 +672,73 @@ pub fn plan_info(d: &Device, targets: &Targets, sizes: &Sizes) -> PlanInfo {
         .to_string();
     let backup =
         "Back up the configuration first (device web UI: Configuration > Backup Configuration).";
-    match plan(
+    if d.http_host.is_some() {
+        return PlanInfo {
+            kind: "manual",
+            title: format!("{current}: reached over HTTP only"),
+            warnings: vec![
+                "Connect it to MQTT first (Enable MQTT): upgrades are followed over MQTT.".into(),
+            ],
+            button: "Upgrade…".into(),
+            ..Default::default()
+        };
+    }
+    match plan_with(
         d.version.as_deref(),
         d.ota_url.as_deref(),
         build32.as_deref(),
         targets.release.as_deref(),
+        &policy,
     ) {
+        Plan::Pinned(c) => PlanInfo {
+            kind: "pinned",
+            title: format!("{current}: at the highest version set for it ({})", fmt_ver(c)),
+            details: vec![format!(
+                "Upgrades stop at {}{}.",
+                fmt_ver(c),
+                if policy.own { " for this device" } else { " (Settings > Firmware)" }
+            )],
+            button: "Upgrade…".into(),
+            ..Default::default()
+        },
+        Plan::Final {
+            set_url,
+            custom: true,
+            ..
+        } => {
+            let url = set_url.unwrap_or_default();
+            PlanInfo {
+                kind: "final",
+                title: format!("{current} → the firmware on your server"),
+                details: vec![
+                    format!("OtaUrl will be set to {url}"),
+                    "The version on a custom server can't be checked: it is installed as it is."
+                        .into(),
+                ],
+                url: Some(url),
+                sets_ota_url: true,
+                can_start: true,
+                button: "Upgrade…".into(),
+                ..Default::default()
+            }
+        }
+        Plan::Final {
+            set_url,
+            pinned: Some(c),
+            ..
+        } => {
+            let url = set_url.unwrap_or_default();
+            PlanInfo {
+                kind: "final",
+                title: format!("{current} → {} (highest version set)", fmt_ver(c)),
+                details: vec![format!("OtaUrl will be set to {url}")],
+                url: Some(url),
+                sets_ota_url: true,
+                can_start: true,
+                button: "Upgrade…".into(),
+                ..Default::default()
+            }
+        }
         Plan::Unknown => PlanInfo {
             kind: "unknown",
             title: "Firmware version not known yet".into(),
@@ -912,7 +1086,9 @@ mod tests {
             Plan::Final {
                 set_url: Some(format!("{OTA_BASE32}release/tasmota32c3.bin")),
                 index: 1,
-                total: 1
+                total: 1,
+                custom: false,
+                pinned: None
             }
         );
         // On 16.0.0 from the milestone: the OtaUrl goes back to the release channel.
@@ -927,9 +1103,77 @@ mod tests {
             Plan::Final {
                 set_url: Some(format!("{OTA_BASE}release/tasmota.bin.gz")),
                 index: 1,
-                total: 1
+                total: 1,
+                custom: false,
+                pinned: None
             }
         );
+    }
+
+    #[test]
+    fn custom_server_and_highest_version() {
+        use crate::ota_policy::Policy;
+        let pin = |max: [u32; 3]| Policy { max: Some(max), ..Default::default() };
+        // Capped below the latest: the release folder of the cap.
+        assert_eq!(
+            plan_with(Some("10.1.0(tasmota)"), None, None, Some("15.2.0"), &pin([11, 1, 0])),
+            Plan::Final {
+                set_url: Some(format!("{OTA_BASE}release-11.1.0/tasmota.bin.gz")),
+                index: 1,
+                total: 1,
+                custom: false,
+                pinned: Some([11, 1, 0]),
+            }
+        );
+        // At or above the cap: nothing to do (no downgrade).
+        assert_eq!(
+            plan_with(Some("11.1.0(tasmota)"), None, None, Some("15.2.0"), &pin([11, 1, 0])),
+            Plan::Pinned([11, 1, 0])
+        );
+        assert_eq!(
+            plan_with(Some("12.0.0(tasmota)"), None, None, Some("15.2.0"), &pin([11, 1, 0])),
+            Plan::Pinned([11, 1, 0])
+        );
+        // A cap above the latest changes nothing.
+        assert!(matches!(
+            plan_with(Some("14.0.0(tasmota)"), None, None, Some("15.2.0"), &pin([20, 0, 0])),
+            Plan::Final { pinned: None, custom: false, .. }
+        ));
+        // The path stops at the cap: 6.7.1 capped at 8.5.1 ends with the 8.5.1 step.
+        match plan_with(Some("6.7.1(sonoff)"), None, None, Some("15.2.0"), &pin([8, 5, 1])) {
+            Plan::Step { target, total, milestone, .. } => {
+                assert_eq!(target, [7, 2, 0]);
+                assert_eq!(total, 2);
+                assert!(!milestone);
+            }
+            p => panic!("{p:?}"),
+        }
+        // Below 10.0.0.3 capped at 11: no 16.0.0 milestone.
+        assert!(matches!(
+            plan_with(Some("9.1.0(tasmota)"), None, None, Some("16.1.0"), &pin([11, 0, 0])),
+            Plan::Final { pinned: Some([11, 0, 0]), .. }
+        ));
+        // Custom server: the device's build in the template, no cap, no version check.
+        let custom = Policy {
+            custom_url: Some("http://10.0.0.5/fw/{build}.bin.gz".into()),
+            max: Some([11, 0, 0]),
+            own: false,
+        };
+        assert_eq!(
+            plan_with(Some("12.0.0(sensors)"), None, None, Some("15.2.0"), &custom),
+            Plan::Final {
+                set_url: Some("http://10.0.0.5/fw/tasmota-sensors.bin.gz".into()),
+                index: 1,
+                total: 1,
+                custom: true,
+                pinned: None,
+            }
+        );
+        // Status: the cap is the target.
+        let st = status_with(Some("11.1.0(tasmota)"), None, &Targets { release: Some("15.2.0".into()), development: None }, &pin([11, 1, 0]));
+        assert!(st.up_to_date && !st.outdated);
+        let st = status_with(Some("10.0.0(tasmota)"), None, &Targets { release: Some("15.2.0".into()), development: None }, &pin([11, 1, 0]));
+        assert!(st.outdated && st.target.as_deref() == Some("11.1.0"));
     }
 
     #[test]
@@ -990,7 +1234,9 @@ mod tests {
             Plan::Final {
                 set_url: Some(format!("{OTA_BASE}release/tasmota.bin.gz")),
                 index: 1,
-                total: 1
+                total: 1,
+                custom: false,
+                pinned: None
             }
         );
         // Its own OtaUrl is kept.
@@ -1000,7 +1246,9 @@ mod tests {
             Plan::Final {
                 set_url: None,
                 index: 1,
-                total: 1
+                total: 1,
+                custom: false,
+                pinned: None
             }
         );
         // Dead old default.
@@ -1015,7 +1263,9 @@ mod tests {
             Plan::Final {
                 set_url: Some(format!("{OTA_BASE}release/tasmota-sensors.bin.gz")),
                 index: 1,
-                total: 1
+                total: 1,
+                custom: false,
+                pinned: None
             }
         );
     }

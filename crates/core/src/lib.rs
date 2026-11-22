@@ -6,15 +6,25 @@ pub mod columns;
 pub mod config;
 pub mod console;
 pub mod device;
+pub mod http_dev;
 pub mod github;
 pub mod light;
 pub mod mqtt;
 pub mod ota;
+pub mod ota_policy;
 pub mod session;
 pub mod setoption;
 pub mod wifi;
 
 use std::sync::Arc;
+
+/// Where the files of the console, firmware settings and HTTP devices go, on platforms
+/// without a standard config directory (Android).
+pub fn set_data_dir(dir: std::path::PathBuf) {
+    console::set_dir(dir.clone());
+    ota_policy::set_dir(dir.clone());
+    http_dev::set_dir(dir);
+}
 
 /// Callback used by background threads to say "something changed".
 pub type Notify = Arc<dyn Fn() + Send + Sync>;

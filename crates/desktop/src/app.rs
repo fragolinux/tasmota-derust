@@ -5,13 +5,15 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Sender};
 use egui::{Align, Align2, Color32, FontId, Layout, RichText, Sense, Stroke, vec2};
 use egui_extras::{Column as TCol, TableBuilder};
 
 use tasmota_derust_core::columns::{Col, View};
 use tasmota_derust_core::config::{BrokerConfig, Config, WebLogin};
 use tasmota_derust_core::console;
+use tasmota_derust_core::http_dev;
+use tasmota_derust_core::ota_policy;
 use tasmota_derust_core::device::{self, Action, Device, StartError, Store, UpgradePhase};
 use tasmota_derust_core::github::{self, Latest};
 use tasmota_derust_core::light;
@@ -58,6 +60,8 @@ enum Confirm {
     ForgetOffline,
     /// `Restart 1`.
     Restart(String),
+    /// Upgrade the ticked devices, each on its own.
+    UpgradeMany(Vec<String>),
     /// A console line that can cut the device off (Wi-Fi, MQTT, reset): device, line.
     Console(String, String),
 }
@@ -142,6 +146,10 @@ enum UiAction {
     AskForget(String),
     AskForgetOffline,
     AskRestart(String),
+    /// Tick / untick a device.
+    Select(String, bool),
+    OpenOta(String),
+    AskHttpPassword(String),
     Sort(Option<Col>),
 }
 
@@ -192,6 +200,8 @@ pub struct DerustApp {
     read_only: bool,
     /// Short message shown at the bottom of the window, with the time it appeared.
     notice: Option<(String, Instant)>,
+    /// A short hint that fades out by itself (2.5 s), e.g. "Dashboard: online devices only".
+    toast: Option<(String, Instant)>,
     /// Light control window: device topic and the values being edited.
     light_open: Option<(String, LightEdit)>,
     /// Changelog popup: version and its notes (None while loading).
@@ -207,14 +217,59 @@ pub struct DerustApp {
     /// The gear's menu: device, where it opens, and "opened this frame" (that click is not
     /// a click outside it).
     tools_open: Option<(String, egui::Pos2, bool)>,
+    /// Devices ticked in the list (group upgrade, Enable MQTT).
+    selected: std::collections::BTreeSet<String>,
+    /// Answers of HTTP-only devices, from the threads that ask them.
+    http_tx: Sender<(String, http_dev::Answer)>,
+    http_rx: Receiver<(String, http_dev::Answer)>,
+    http_polled: Instant,
+    search_open: Option<SearchWindow>,
+    mqtt_open: Option<MqttWindow>,
+    ota_open: Option<OtaWindow>,
+    /// Firmware defaults being edited in Settings.
+    ota_draft: ota_policy::OtaSettings,
+    ota_error: Option<String>,
+    /// Web password of an HTTP-only device being typed: device, password.
+    http_pw_open: Option<(String, String)>,
     #[cfg(feature = "screenshots")]
     shots: Option<shots::Shots>,
+}
+
+/// "Find devices": the range and password typed, the search running or done.
+#[derive(Default)]
+struct SearchWindow {
+    range: String,
+    password: String,
+    running: Option<http_dev::Search>,
+    message: Option<String>,
+}
+
+/// "Enable MQTT" for the ticked HTTP-only devices.
+struct MqttWindow {
+    keys: Vec<String>,
+    host: String,
+    port: String,
+    user: String,
+    /// Empty: the app's own broker password.
+    password: String,
+    error: Option<String>,
+}
+
+/// One device's firmware server and highest version.
+struct OtaWindow {
+    key: String,
+    own_url: bool,
+    url: String,
+    own_max: bool,
+    max: String,
+    error: Option<String>,
 }
 
 impl DerustApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let ctx = cc.egui_ctx.clone();
         let cfg = Config::load();
+        let (http_tx, http_rx) = crossbeam_channel::unbounded();
         let mut app = Self {
             repaint: repaint(&ctx),
             draft: cfg.broker.clone(),
@@ -240,6 +295,7 @@ impl DerustApp {
             web_error: None,
             read_only: true,
             notice: None,
+            toast: None,
             changelog: None,
             about_open: false,
             about_notes: None,
@@ -249,10 +305,24 @@ impl DerustApp {
             backup_open: None,
             consoles: Vec::new(),
             tools_open: None,
+            selected: Default::default(),
+            http_tx,
+            http_rx,
+            http_polled: Instant::now(),
+            search_open: None,
+            mqtt_open: None,
+            ota_open: None,
+            ota_draft: ota_policy::default_settings(),
+            ota_error: None,
+            http_pw_open: None,
             #[cfg(feature = "screenshots")]
             shots: shots::Shots::from_env(),
         };
+        // Opens on the dashboard, offline devices hidden.
+        app.cfg.view = View::Dashboard;
+        app.cfg.show_offline = false;
         ctx.set_theme(theme_pref(&app.cfg.theme));
+        system_fonts(&ctx);
         if app.cfg.broker.host.trim().is_empty() {
             app.settings_open = true;
         } else {
@@ -265,6 +335,12 @@ impl DerustApp {
         self.mqtt = None;
         self.rx = None;
         self.store = Store::default();
+        // HTTP-only devices found earlier: back in the list, asked for their status.
+        for h in http_dev::saved() {
+            self.store.add_http_saved(&h);
+        }
+        let poll = self.store.poll_http();
+        self.apply(poll);
         if self.cfg.broker.host.trim().is_empty() {
             self.conn = Conn::NotConfigured;
             return;
@@ -352,7 +428,73 @@ impl DerustApp {
                     }
                     self.push_log('>', &topic, "(retained message cleared)");
                 }
+                Action::Http {
+                    key,
+                    host,
+                    command,
+                    password,
+                } => {
+                    let (cmd, payload) = command.split_once(' ').unwrap_or((&command, ""));
+                    self.push_log('>', &format!("http://{host}/cm"), &console::mask(cmd, &format!("{cmd} {payload}")));
+                    let (tx, repaint) = (self.http_tx.clone(), self.repaint.clone());
+                    std::thread::spawn(move || {
+                        let answer = http_dev::command(&host, &command, password.as_deref());
+                        let _ = tx.send((key, answer));
+                        repaint();
+                    });
+                }
             }
+        }
+    }
+
+    /// HTTP-only devices (answers, the poll every minute, the search) and the next steps of
+    /// group upgrades.
+    fn http_tick(&mut self) {
+        let answers: Vec<_> = self.http_rx.try_iter().collect();
+        for (key, answer) in answers {
+            if let http_dev::Answer::Json(v) = &answer {
+                let host = http_dev::host_of_key(&key).unwrap_or(&key).to_string();
+                self.push_log('<', &format!("http://{host}/cm"), &v.to_string());
+            }
+            if let Some(h) = self.store.handle_http(&key, &answer) {
+                // Not a Tasmota after all: out of the list and of the saved addresses.
+                http_dev::forget(&h);
+                self.selected.remove(&key);
+            }
+        }
+        for h in self.store.merge_http() {
+            http_dev::forget(&h);
+            self.selected.remove(&http_dev::key(&h));
+        }
+        if self.http_polled.elapsed() >= Duration::from_secs(60) {
+            self.http_polled = Instant::now();
+            let a = self.store.poll_http();
+            self.apply(a);
+        }
+        if !self.read_only {
+            let targets = self.targets();
+            let a = self.store.continue_upgrades(&targets);
+            self.apply(a);
+        }
+        let finished = self.search_open.as_ref().and_then(|w| {
+            let s = w.running.as_ref()?;
+            s.result.lock().unwrap().clone()
+        });
+        if let (Some(found), Some(w)) = (finished, self.search_open.as_mut()) {
+            let pw = Some(w.password.clone()).filter(|p| !p.is_empty());
+            let mut added = 0;
+            for f in &found {
+                if self.store.add_http(&f.host, f.status.as_ref(), pw.as_deref()).is_some() {
+                    http_dev::remember(&f.host);
+                    added += 1;
+                }
+            }
+            w.running = None;
+            w.message = Some(match (found.len(), added) {
+                (0, _) => "No Tasmota answered.".into(),
+                (n, 0) => format!("{n} Tasmota found, all already on MQTT."),
+                (n, a) => format!("{n} Tasmota found; {a} reached over HTTP only, added to the list."),
+            });
         }
     }
 
@@ -492,6 +634,31 @@ impl DerustApp {
 
     fn show_notice(&mut self, text: &str) {
         self.notice = Some((text.to_string(), Instant::now()));
+    }
+
+    fn show_toast(&mut self, text: &str) {
+        self.toast = Some((text.to_string(), Instant::now()));
+    }
+
+    /// The toast: shown 2 s, then fades out in 0.5 s. Never in the way (not clickable).
+    fn toast_overlay(&mut self, ctx: &egui::Context) {
+        let Some((text, since)) = &self.toast else { return };
+        let t = since.elapsed().as_secs_f32();
+        if t > 2.5 {
+            self.toast = None;
+            return;
+        }
+        let alpha = if t < 2.0 { 1.0 } else { (2.5 - t) / 0.5 };
+        egui::Area::new(egui::Id::unique("toast"))
+            .anchor(Align2::CENTER_TOP, vec2(0.0, 96.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                ui.multiply_opacity(alpha);
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(RichText::new(text.as_str()).strong());
+                });
+            });
+        ctx.request_repaint_after(Duration::from_millis(30));
     }
 
     fn notice_overlay(&mut self, ctx: &egui::Context) {
@@ -871,6 +1038,291 @@ impl DerustApp {
         self.consoles = wins;
     }
 
+    /// "N ticked": upgrade them, connect the HTTP-only ones to MQTT, untick.
+    fn selection_bar(&mut self, ui: &mut egui::Ui) {
+        let keys: Vec<String> = self.selected.iter().cloned().collect();
+        let http: Vec<String> = keys
+            .iter()
+            .filter(|k| self.store.devices.get(*k).is_some_and(|d| d.http_host.is_some()))
+            .cloned()
+            .collect();
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{} ticked", keys.len())).strong());
+            if ui
+                .button("Upgrade…")
+                .on_hover_text("Upgrade them all at once, each on its own")
+                .clicked()
+            {
+                if self.read_only {
+                    self.show_notice(READ_ONLY_NOTICE);
+                } else {
+                    self.confirm = Some(Confirm::UpgradeMany(keys.clone()));
+                }
+            }
+            if ui
+                .add_enabled(!http.is_empty(), egui::Button::new(format!("Enable MQTT ({})…", http.len())))
+                .on_hover_text("Send the broker settings to the HTTP-only ones (they restart and join MQTT)")
+                .clicked()
+            {
+                if self.read_only {
+                    self.show_notice(READ_ONLY_NOTICE);
+                } else {
+                    let b = &self.cfg.broker;
+                    self.mqtt_open = Some(MqttWindow {
+                        keys: http.clone(),
+                        host: b.host.trim().to_string(),
+                        port: b.port.to_string(),
+                        user: b.username.clone(),
+                        password: String::new(),
+                        error: None,
+                    });
+                }
+            }
+            if ui.button("Tick all shown").clicked() {
+                let shown: Vec<String> = self
+                    .store
+                    .devices
+                    .values()
+                    .filter(|d| self.cfg.show_offline || d.reachable() == Some(true))
+                    .map(|d| d.topic.clone())
+                    .collect();
+                self.selected.extend(shown);
+            }
+            if ui.button("Untick all").clicked() {
+                self.selected.clear();
+            }
+        });
+    }
+
+    fn search_window(&mut self, ctx: &egui::Context) {
+        let Some(mut w) = self.search_open.take() else { return };
+        let mut open = true;
+        let mut start = false;
+        egui::Window::new("Find devices on the network")
+            .id(egui::Id::unique("search-window"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(460.0)
+            .show(ctx, |ui| {
+                ui.label("Asks every address of the network for its status over HTTP (read-only), to find Tasmota devices, also those without MQTT. Those not on MQTT are added to the list, marked HTTP.");
+                ui.add_space(6.0);
+                egui::Grid::new("search-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                    ui.label("Addresses");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut w.range)
+                            .hint_text(http_dev::local_range().unwrap_or_else(|| "e.g. 192.168.1.0/24".into()))
+                            .desired_width(260.0),
+                    );
+                    ui.end_row();
+                    ui.label("Web password");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut w.password)
+                            .password(true)
+                            .hint_text("only if your devices have one")
+                            .desired_width(260.0),
+                    );
+                    ui.end_row();
+                });
+                ui.label(RichText::new("Filled in with this computer's network (address and netmask). Also e.g. 192.168.1.20-80, or several, comma separated. Only devices that answer as Tasmota are added: Shelly, routers and other web servers are left out.").weak().small());
+                ui.add_space(6.0);
+                if let Some(s) = &w.running {
+                    let done = s.done.load(std::sync::atomic::Ordering::Relaxed);
+                    ui.add(egui::ProgressBar::new(done as f32 / s.total.max(1) as f32).text(format!("{done} / {}", s.total)));
+                    ctx.request_repaint_after(Duration::from_millis(200));
+                } else {
+                    if let Some(m) = &w.message {
+                        ui.label(m.as_str());
+                    }
+                    if ui.button(RichText::new("Search").strong()).clicked() {
+                        start = true;
+                    }
+                }
+            });
+        if start {
+            match http_dev::hosts(&w.range) {
+                Ok(hosts) => {
+                    let search = http_dev::Search { total: hosts.len(), ..Default::default() };
+                    let (done, result) = (search.done.clone(), search.result.clone());
+                    let pw = Some(w.password.clone()).filter(|p| !p.is_empty());
+                    let repaint = self.repaint.clone();
+                    std::thread::spawn(move || {
+                        let found = http_dev::scan(&hosts, pw.as_deref(), &done);
+                        *result.lock().unwrap() = Some(found);
+                        repaint();
+                    });
+                    w.running = Some(search);
+                    w.message = None;
+                }
+                Err(e) => w.message = Some(e.message().into()),
+            }
+        }
+        if open || w.running.is_some() {
+            self.search_open = Some(w);
+        }
+    }
+
+    fn mqtt_window(&mut self, ctx: &egui::Context) {
+        let Some(mut w) = self.mqtt_open.take() else { return };
+        let mut open = true;
+        let mut send = false;
+        let names: Vec<String> = w
+            .keys
+            .iter()
+            .filter_map(|k| self.store.devices.get(k).map(|d| d.display_name().to_string()))
+            .collect();
+        egui::Window::new("Enable MQTT")
+            .id(egui::Id::unique("mqtt-window"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(460.0)
+            .show(ctx, |ui| {
+                ui.label(format!("Connect to the broker: {}", names.join(", ")));
+                ui.label(RichText::new("They get MQTT on (SetOption3 1), broker, port, user and password in one Backlog over HTTP, restart, and show up over MQTT.").weak());
+                ui.add_space(6.0);
+                egui::Grid::new("mqtt-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                    ui.label("Broker");
+                    ui.add(egui::TextEdit::singleline(&mut w.host).desired_width(240.0));
+                    ui.end_row();
+                    ui.label("Port");
+                    ui.add(egui::TextEdit::singleline(&mut w.port).desired_width(80.0));
+                    ui.end_row();
+                    ui.label("User");
+                    ui.add(egui::TextEdit::singleline(&mut w.user).desired_width(240.0));
+                    ui.end_row();
+                    ui.label("Password");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut w.password)
+                            .password(true)
+                            .hint_text("empty: this app's broker password")
+                            .desired_width(240.0),
+                    );
+                    ui.end_row();
+                });
+                if matches!(w.host.trim(), "127.0.0.1" | "localhost" | "::1") {
+                    ui.colored_label(ORANGE, "127.0.0.1 / localhost is this computer: the devices need the broker's network address.");
+                }
+                ui.label(RichText::new("The password travels over plain HTTP, like Tasmota's own web page.").weak().small());
+                if let Some(e) = &w.error {
+                    ui.colored_label(RED, e.as_str());
+                }
+                ui.add_space(6.0);
+                if ui.button(RichText::new("Send").strong()).clicked() {
+                    send = true;
+                }
+            });
+        if send {
+            let pw = if w.password.is_empty() { self.cfg.broker.password.clone() } else { w.password.clone() };
+            match (w.port.trim().parse::<u16>(), http_dev::mqtt_backlog(&w.host, w.port.trim().parse().unwrap_or(0), &w.user, &pw)) {
+                (Ok(_), Some(line)) if !self.read_only => {
+                    let payload = line.trim_start_matches("Backlog ").to_string();
+                    let actions: Vec<Action> = w
+                        .keys
+                        .iter()
+                        .filter_map(|k| self.store.command(k, "Backlog", &payload))
+                        .collect();
+                    let n = actions.len();
+                    self.apply(actions);
+                    self.show_notice(&format!("MQTT settings sent to {n} device(s): they restart and show up over MQTT."));
+                    return;
+                }
+                _ if self.read_only => w.error = Some(READ_ONLY_NOTICE.into()),
+                _ => w.error = Some("Give the broker address the devices can reach, a port number, and no ';'.".into()),
+            }
+        }
+        if open {
+            self.mqtt_open = Some(w);
+        }
+    }
+
+    fn ota_window(&mut self, ctx: &egui::Context) {
+        let Some(mut w) = self.ota_open.take() else { return };
+        let Some(d) = self.store.devices.get(&w.key) else { return };
+        let name = d.display_name().to_string();
+        let def = ota_policy::default_settings();
+        let mut open = true;
+        let mut save = false;
+        egui::Window::new(format!("{name} — Firmware source"))
+            .id(egui::Id::unique("ota-window").with(&w.key))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(460.0)
+            .show(ctx, |ui| {
+                ui.checkbox(&mut w.own_url, "Own firmware server for this device");
+                if w.own_url {
+                    ui.add(egui::TextEdit::singleline(&mut w.url).hint_text("empty: official server; or http://server/{build}.bin.gz").desired_width(400.0));
+                } else {
+                    ui.label(RichText::new(format!("Default: {}", if def.custom_url.is_empty() { "official server" } else { &def.custom_url })).weak());
+                }
+                ui.add_space(6.0);
+                ui.checkbox(&mut w.own_max, "Own highest version for this device");
+                if w.own_max {
+                    ui.add(egui::TextEdit::singleline(&mut w.max).hint_text("empty: latest; or e.g. 11.1.0").desired_width(120.0));
+                } else {
+                    ui.label(RichText::new(format!("Default: {}", if def.max_version.is_empty() { "latest" } else { &def.max_version })).weak());
+                }
+                if let Some(e) = &w.error {
+                    ui.colored_label(RED, e.as_str());
+                }
+                ui.add_space(6.0);
+                if ui.button(RichText::new("Save").strong()).clicked() {
+                    save = true;
+                }
+            });
+        if save {
+            let o = ota_policy::DeviceOta {
+                custom_url: w.own_url.then(|| w.url.clone()),
+                max_version: w.own_max.then(|| w.max.clone()),
+            };
+            match ota_policy::set_device(&w.key, o) {
+                Ok(()) => {
+                    self.show_notice(&format!("{name}: firmware source saved."));
+                    return;
+                }
+                Err(e) => w.error = Some(e.message().into()),
+            }
+        }
+        if open {
+            self.ota_open = Some(w);
+        }
+    }
+
+    fn http_password_window(&mut self, ctx: &egui::Context) {
+        let Some((key, mut pw)) = self.http_pw_open.take() else { return };
+        let mut open = true;
+        let mut ok = false;
+        egui::Window::new("Web password")
+            .id(egui::Id::unique("http-pw"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!("The web password of {} (kept only while the app runs).", http_dev::host_of_key(&key).unwrap_or(&key)));
+                let r = ui.add(egui::TextEdit::singleline(&mut pw).password(true));
+                if ui.button("OK").clicked() || r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    ok = true;
+                }
+            });
+        if ok {
+            if let Some(d) = self.store.devices.get_mut(&key) {
+                d.http_password = Some(pw.clone()).filter(|p| !p.is_empty());
+            }
+            let a: Vec<Action> = self
+                .store
+                .poll_http()
+                .into_iter()
+                .filter(|a| matches!(a, Action::Http { key: k, .. } if *k == key))
+                .collect();
+            self.apply(a);
+            return;
+        }
+        if open {
+            self.http_pw_open = Some((key, pw));
+        }
+    }
+
     fn options_window(&mut self, ctx: &egui::Context) {
         let Some(mut w) = self.options_open.take() else {
             return;
@@ -1014,6 +1466,13 @@ impl DerustApp {
                         .clicked()
                     {
                         picked = Some(UiAction::OpenBackup(key.clone()));
+                    }
+                    if ui
+                        .add(egui::Button::new("Firmware source…").frame(false))
+                        .on_hover_text("Firmware server and highest version for this device")
+                        .clicked()
+                    {
+                        picked = Some(UiAction::OpenOta(key.clone()));
                     }
                     if ui
                         .add(egui::Button::new("Restart…").frame(false))
@@ -1594,20 +2053,14 @@ impl DerustApp {
         ui.horizontal(|ui| {
             ui.label(RichText::new("Tasmota Derust").strong().size(16.0));
             ui.separator();
-            for v in View::ALL {
-                if ui.selectable_label(self.cfg.view == v, v.label()).clicked()
-                    && self.cfg.view != v
-                {
-                    self.cfg.view = v;
-                    self.cfg.save();
-                }
-            }
-            ui.separator();
             if ui
                 .checkbox(&mut self.cfg.show_offline, "Show offline")
                 .changed()
             {
                 self.cfg.save();
+                if self.cfg.show_offline && self.cfg.view == View::Dashboard {
+                    self.show_toast("The dashboard shows online devices only");
+                }
             }
             let offline = self.offline_keys().len();
             if self.cfg.show_offline
@@ -1621,7 +2074,9 @@ impl DerustApp {
             {
                 self.handle_actions(vec![UiAction::AskForgetOffline]);
             }
-            self.columns_menu(ui);
+            if self.cfg.view != View::Dashboard {
+                self.columns_menu(ui);
+            }
             if ui
                 .button("Refresh")
                 .on_hover_text("Ask every online device for its full status")
@@ -1629,6 +2084,17 @@ impl DerustApp {
             {
                 let a = self.store.refresh_all();
                 self.apply(a);
+            }
+            if ui
+                .button("Find devices…")
+                .on_hover_text("Search the local network for Tasmota devices over HTTP, also those without MQTT")
+                .clicked()
+            {
+                self.search_open.get_or_insert_with(|| SearchWindow {
+                    // This computer's network, from its address and netmask.
+                    range: http_dev::local_range().unwrap_or_default(),
+                    ..Default::default()
+                });
             }
             ui.separator();
             self.read_only_toggle(ui);
@@ -1643,45 +2109,58 @@ impl DerustApp {
                 ui.separator();
                 self.web_controls(ui);
                 ui.separator();
-                // Copied first: targets() takes the same lock.
-                let latest = self.latest.lock().unwrap().clone();
-                match self.cfg.view {
-                    View::Wifi => {
-                        // Right-to-left: add in reverse order.
-                        for (i, s) in self.store.ssids.iter().enumerate().rev() {
-                            ui.label(s.as_deref().unwrap_or("?"));
-                            chip(ui, &format!("{}", i + 1), GRAY);
-                            ui.add_space(8.0);
-                        }
-                    }
-                    View::Firmware => match latest {
-                        Latest::Ok(v) => {
-                            // Right-to-left: the development build goes first.
-                            if let Some(dev) = self.targets().development {
-                                ui.hyperlink_to(
-                                    format!("dev {dev}"),
-                                    "https://github.com/arendst/Tasmota/commits/development",
-                                );
-                                ui.label("·");
-                            }
-                            ui.hyperlink_to(
-                                format!("Latest {v}"),
-                                "https://github.com/arendst/Tasmota/releases/latest",
-                            );
-                        }
-                        Latest::Loading => {
-                            ui.label("Checking latest release…");
-                        }
-                        Latest::Err(e) => {
-                            ui.colored_label(RED, "Latest release unknown")
-                                .on_hover_text(e.as_str());
-                        }
-                    },
-                    _ => {}
-                }
+
             });
         });
-        ui.add_space(4.0);
+        ui.add_space(2.0);
+        self.tabs(ui);
+    }
+
+    /// The views as tabs, on their own row; the Wi-Fi view's networks on the right.
+    fn tabs(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for v in View::ALL {
+                let selected = self.cfg.view == v;
+                let text = RichText::new(v.label()).size(14.0);
+                let text = if selected { text.strong().color(ui.visuals().strong_text_color()) } else { text };
+                let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
+                let size = vec2(galley.size().x + 28.0, galley.size().y + 14.0);
+                let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+                let p = ui.painter();
+                let accent = ui.visuals().selection.bg_fill;
+                if selected {
+                    p.rect_filled(rect, egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 }, ui.visuals().faint_bg_color);
+                    p.rect_filled(
+                        egui::Rect::from_min_max(egui::pos2(rect.left() + 6.0, rect.bottom() - 3.0), egui::pos2(rect.right() - 6.0, rect.bottom())),
+                        2.0,
+                        accent,
+                    );
+                } else if resp.hovered() {
+                    p.rect_filled(rect, egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 }, ui.visuals().widgets.hovered.weak_bg_fill);
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                let color = if selected { ui.visuals().strong_text_color() } else { ui.visuals().text_color() };
+                p.galley(rect.center() - galley.size() / 2.0, galley, color);
+                if resp.clicked() && !selected {
+                    self.cfg.view = v;
+                    self.cfg.save();
+                    if v == View::Dashboard && self.cfg.show_offline {
+                        self.show_toast("The dashboard shows online devices only");
+                    }
+                }
+            }
+            if self.cfg.view == View::Wifi {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // Right-to-left: add in reverse order.
+                    for (i, s) in self.store.ssids.iter().enumerate().rev() {
+                        ui.label(s.as_deref().unwrap_or("?"));
+                        chip(ui, &format!("{}", i + 1), GRAY);
+                        ui.add_space(8.0);
+                    }
+                });
+            }
+        });
     }
 
     fn columns_menu(&mut self, ui: &mut egui::Ui) {
@@ -1779,6 +2258,31 @@ impl DerustApp {
                 if me.clicked() {
                     self.about_open = !self.about_open;
                 }
+                // Latest Tasmota versions (right-to-left: the development build first).
+                let latest = self.latest.lock().unwrap().clone();
+                ui.separator();
+                match latest {
+                    Latest::Ok(v) => {
+                        if let Some(dev) = self.targets().development {
+                            ui.hyperlink_to(
+                                format!("dev {dev}"),
+                                "https://github.com/arendst/Tasmota/commits/development",
+                            );
+                            ui.label("·");
+                        }
+                        ui.hyperlink_to(
+                            format!("Tasmota {v}"),
+                            "https://github.com/arendst/Tasmota/releases/latest",
+                        );
+                    }
+                    Latest::Loading => {
+                        ui.label("Checking latest Tasmota…");
+                    }
+                    Latest::Err(e) => {
+                        ui.colored_label(RED, "Latest Tasmota unknown").on_hover_text(e.as_str());
+                    }
+                }
+                ui.separator();
                 let update = github::app_update(&self.app_latest.lock().unwrap());
                 if let Some(v) = update {
                     let r = ui
@@ -1880,6 +2384,15 @@ impl DerustApp {
             return;
         }
 
+        if view == View::Dashboard {
+            // Quick controls: only devices that answer.
+            let online: Vec<&Device> = rows
+                .iter()
+                .copied()
+                .filter(|d| d.is_online() || is_upgrading(d))
+                .collect();
+            return dashboard(ui, &online, actions);
+        }
         let desc = self.sort_desc;
         egui::ScrollArea::horizontal().show(ui, |ui| {
             let mut tb = TableBuilder::new(ui)
@@ -1888,7 +2401,7 @@ impl DerustApp {
                 .resizable(true)
                 .auto_shrink(false)
                 .cell_layout(Layout::left_to_right(Align::Center))
-                .column(TCol::initial(240.0).at_least(120.0).clip(true));
+                .column(TCol::initial(300.0).at_least(140.0).clip(true));
             for c in &cols {
                 tb = tb.column(if *c == Col::Update {
                     // Upgrade progress texts vary in length: the column fits them.
@@ -1917,7 +2430,7 @@ impl DerustApp {
                         if new {
                             new_row_tint(ui);
                         }
-                        device_cell(ui, d, actions)
+                        device_cell(ui, d, self.selected.contains(&d.topic), actions)
                     });
                     for c in &cols {
                         row.col(|ui| {
@@ -2011,6 +2524,25 @@ impl DerustApp {
                 UiAction::AskForget(key) => self.confirm = Some(Confirm::Forget(key)),
                 UiAction::AskForgetOffline => self.confirm = Some(Confirm::ForgetOffline),
                 UiAction::AskRestart(key) => self.confirm = Some(Confirm::Restart(key)),
+                UiAction::Select(key, on) => {
+                    if on {
+                        self.selected.insert(key);
+                    } else {
+                        self.selected.remove(&key);
+                    }
+                }
+                UiAction::OpenOta(key) => {
+                    let o = ota_policy::device(&key);
+                    self.ota_open = Some(OtaWindow {
+                        key,
+                        own_url: o.custom_url.is_some(),
+                        url: o.custom_url.unwrap_or_default(),
+                        own_max: o.max_version.is_some(),
+                        max: o.max_version.unwrap_or_default(),
+                        error: None,
+                    });
+                }
+                UiAction::AskHttpPassword(key) => self.http_pw_open = Some((key, String::new())),
                 UiAction::AskAp(key, n) => self.confirm = Some(Confirm::SwitchAp(key, n)),
                 UiAction::Sort(c) => {
                     if self.sort == c {
@@ -2070,6 +2602,39 @@ impl DerustApp {
                         ui.add(egui::TextEdit::singleline(&mut self.draft.password).password(true));
                         ui.end_row();
                     });
+                ui.separator();
+                ui.label(RichText::new("Firmware").strong());
+                egui::Grid::new("fw-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                    ui.label("Firmware server");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.ota_draft.custom_url)
+                            .hint_text("official (empty), or http://server/{build}.bin.gz")
+                            .desired_width(320.0),
+                    );
+                    ui.end_row();
+                    ui.label("Highest version");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.ota_draft.max_version)
+                            .hint_text("latest (empty), or e.g. 11.1.0")
+                            .desired_width(120.0),
+                    );
+                    ui.end_row();
+                });
+                ui.label(RichText::new("For every device; a device's gear > Firmware source can differ. {build} becomes the device's build (tasmota, tasmota-sensors, tasmota32c3…). The version on your own server can't be checked: upgrades install what it serves. The highest version applies to the official server.").weak().small());
+                ui.horizontal(|ui| {
+                    if ui.button("Save firmware settings").clicked() {
+                        self.ota_error = match ota_policy::set_default(self.ota_draft.clone()) {
+                            Ok(()) => {
+                                self.ota_draft = ota_policy::default_settings();
+                                Some("Saved.".into())
+                            }
+                            Err(e) => Some(e.message().into()),
+                        };
+                    }
+                    if let Some(e) = &self.ota_error {
+                        ui.label(e.as_str());
+                    }
+                });
                 ui.separator();
                 ui.label(RichText::new("Web server").strong());
                 ui.checkbox(
@@ -2175,6 +2740,11 @@ impl DerustApp {
         match self.store.forget(key) {
             Some(a) => {
                 self.push_log('*', "removed", key);
+                // HTTP-only: out of the saved addresses too, or it comes back at the next start.
+                if let Some(h) = http_dev::host_of_key(key) {
+                    http_dev::forget(h);
+                }
+                self.selected.remove(key);
                 a
             }
             None => {
@@ -2191,6 +2761,87 @@ impl DerustApp {
             .filter(|(_, d)| d.reachable() == Some(false))
             .map(|(k, _)| k.clone())
             .collect()
+    }
+
+    /// Confirmation of a group upgrade: what each ticked device would do.
+    fn upgrade_many_dialog(&mut self, ctx: &egui::Context) {
+        let Some(Confirm::UpgradeMany(keys)) = &self.confirm else { return };
+        let keys = keys.clone();
+        let targets = self.targets();
+        let rows: Vec<(String, String, String, bool)> = keys
+            .iter()
+            .filter_map(|k| {
+                let d = self.store.devices.get(k)?;
+                let p = ota::plan_info(d, &targets, &self.store.sizes);
+                let st = ota::device_status(d, &targets);
+                let ok = d.is_online()
+                    && matches!(p.kind, "step" | "final")
+                    && !(p.kind == "final" && st.up_to_date);
+                let why = if !d.is_online() {
+                    "offline".into()
+                } else if p.kind == "final" && st.up_to_date {
+                    "up to date".into()
+                } else {
+                    p.title.clone()
+                };
+                Some((k.clone(), d.display_name().to_string(), why, ok))
+            })
+            .collect();
+        let start: Vec<String> = rows.iter().filter(|r| r.3).map(|r| r.0.clone()).collect();
+        let mut result = None;
+        let resp = egui::Modal::new(egui::Id::unique("confirm-upgrade-many")).show(ctx, |ui| {
+            ui.set_max_width(620.0);
+            ui.heading(format!("Upgrade {} device{}?", start.len(), if start.len() == 1 { "" } else { "s" }));
+            ui.add_space(6.0);
+            ui.label("Each device upgrades on its own, at the same time; a failure stops only that device. Old firmware goes through the upgrade path, step after step, by itself.");
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                egui::Grid::new("upg-many").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                    for (_, name, why, ok) in &rows {
+                        ui.label(RichText::new(name).strong());
+                        if *ok {
+                            ui.label(arrows(why));
+                        } else {
+                            ui.label(RichText::new(format!("skipped: {why}")).weak());
+                        }
+                        ui.end_row();
+                    }
+                });
+            });
+            ui.add_space(6.0);
+            ui.label(RichText::new("Do not power the devices off during the upgrade. Firmware server and highest version: Settings > Firmware, or each device's gear.").weak());
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!start.is_empty(), egui::Button::new(RichText::new("Upgrade").strong())).clicked() {
+                    result = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    result = Some(false);
+                }
+            });
+        });
+        if result.is_none() && resp.should_close() {
+            result = Some(false);
+        }
+        match result {
+            Some(true) if self.read_only => {
+                self.confirm = None;
+                self.show_notice(READ_ONLY_NOTICE);
+            }
+            Some(true) => {
+                self.confirm = None;
+                let mut actions = Vec::new();
+                for k in &start {
+                    if let Ok(a) = self.store.start_upgrade(k, &targets, true) {
+                        actions.extend(a);
+                    }
+                }
+                self.apply(actions);
+                self.show_notice(&format!("Upgrade started on {} device(s).", start.len()));
+            }
+            Some(false) => self.confirm = None,
+            None => {}
+        }
     }
 
     fn forget_offline_dialog(&mut self, ctx: &egui::Context) {
@@ -2260,6 +2911,7 @@ impl DerustApp {
             | Confirm::Restart(k)
             | Confirm::Console(k, _) => k.clone(),
             Confirm::ForgetOffline => return self.forget_offline_dialog(ctx),
+            Confirm::UpgradeMany(_) => return self.upgrade_many_dialog(ctx),
         };
         let Some(d) = self.store.devices.get(&key) else {
             self.confirm = None;
@@ -2386,7 +3038,7 @@ impl DerustApp {
                     ui.colored_label(ORANGE, console::RISK_TEXT);
                     "Send anyway"
                 }
-                Confirm::ForgetOffline => unreachable!("own dialog"),
+                Confirm::ForgetOffline | Confirm::UpgradeMany(_) => unreachable!("own dialog"),
             };
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -2410,13 +3062,10 @@ impl DerustApp {
             }
             Some(true) => {
                 let actions = match self.confirm.take() {
-                    Some(Confirm::Upgrade(k)) => match self.store.start_upgrade(&k, &targets) {
+                    Some(Confirm::Upgrade(k)) => match self.store.start_upgrade(&k, &targets, false) {
                         Ok(a) => a,
                         Err(e) => {
                             self.show_notice(&match e {
-                                StartError::OtherRunning(name) => {
-                                    format!("{name} is being upgraded: one device at a time.")
-                                }
                                 StartError::NotPossible(why) => why,
                                 StartError::Running => "This device is already upgrading.".into(),
                                 StartError::Offline | StartError::Unknown => {
@@ -2447,7 +3096,7 @@ impl DerustApp {
                         }
                         Vec::new()
                     }
-                    Some(Confirm::ForgetOffline) | None => Vec::new(),
+                    Some(Confirm::ForgetOffline | Confirm::UpgradeMany(_)) | None => Vec::new(),
                 };
                 self.apply(actions);
             }
@@ -2462,11 +3111,16 @@ impl eframe::App for DerustApp {
         self.process_events();
         let again = self.store.check_timeouts();
         self.apply(again);
+        self.http_tick();
         let ctx = ui.ctx().clone();
         #[cfg(feature = "screenshots")]
         self.screenshot_tick(&ctx);
 
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
+        self.selected.retain(|k| self.store.devices.contains_key(k));
+        if !self.selected.is_empty() {
+            egui::Panel::top("selection").show(ui, |ui| self.selection_bar(ui));
+        }
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         if self.log_open {
             egui::Panel::bottom("log")
@@ -2486,6 +3140,7 @@ impl eframe::App for DerustApp {
         self.web_start_window(&ctx);
         self.confirm_dialog(&ctx);
         self.notice_overlay(&ctx);
+        self.toast_overlay(&ctx);
         self.about_window(&ctx);
         self.changelog_window(&ctx);
         self.light_window(&ctx);
@@ -2494,6 +3149,10 @@ impl eframe::App for DerustApp {
         self.wifi_window(&ctx);
         self.backup_window(&ctx);
         self.console_windows(&ctx);
+        self.search_window(&ctx);
+        self.mqtt_window(&ctx);
+        self.ota_window(&ctx);
+        self.http_password_window(&ctx);
 
         // Keeps the uptime columns ticking.
         ctx.request_repaint_after(Duration::from_secs(1));
@@ -2651,15 +3310,33 @@ fn signal_icon(ui: &mut egui::Ui, d: &Device) {
     }
 }
 
-fn device_cell(ui: &mut egui::Ui, d: &Device, actions: &mut Vec<UiAction>) {
+fn device_cell(ui: &mut egui::Ui, d: &Device, selected: bool, actions: &mut Vec<UiAction>) {
+    let mut on = selected;
+    if ui
+        .checkbox(&mut on, "")
+        .on_hover_text("Tick devices to upgrade them together, or to connect HTTP-only ones to MQTT")
+        .changed()
+    {
+        actions.push(UiAction::Select(d.topic.clone(), on));
+    }
     signal_icon(ui, d);
-    if d.online != Some(false) {
+    // One slot, always the same width so the names line up: remove for offline devices,
+    // the tools for the others, empty while waiting for an answer.
+    if d.reachable() == Some(false) {
+        let why = if d.http_host.is_some() {
+            "Remove this offline device from the list"
+        } else {
+            "Remove this offline device from the list and from the broker (its retained messages), or it comes back"
+        };
+        if remove_button(ui).on_hover_text(why).clicked() {
+            actions.push(UiAction::AskForget(d.topic.clone()));
+        }
+    } else if d.online != Some(false) {
         let r = gear_button(ui).on_hover_text("SetOptions, Wi-Fi networks, backup / restore");
         if r.clicked() {
             actions.push(UiAction::OpenTools(d.topic.clone(), r.rect.left_bottom()));
         }
     } else {
-        // Keeps the console buttons in one column.
         let h = ui.text_style_height(&egui::TextStyle::Body);
         ui.allocate_exact_size(vec2(h, h), Sense::hover());
     }
@@ -2669,12 +3346,18 @@ fn device_cell(ui: &mut egui::Ui, d: &Device, actions: &mut Vec<UiAction>) {
     {
         actions.push(UiAction::OpenConsole(d.topic.clone()));
     }
-    if d.reachable() == Some(false)
-        && remove_button(ui)
-            .on_hover_text("Remove this offline device from the list")
-            .clicked()
-    {
-        actions.push(UiAction::AskForget(d.topic.clone()));
+    if d.http_host.is_some() {
+        chip(ui, "HTTP", ORANGE).on_hover_text(
+            "Reached over HTTP only, not over MQTT: tick it and use \"Enable MQTT\" in the bar above to connect it to the broker.",
+        );
+        if d.http_locked
+            && ui
+                .small_button("Password…")
+                .on_hover_text("This device has a web password")
+                .clicked()
+        {
+            actions.push(UiAction::AskHttpPassword(d.topic.clone()));
+        }
     }
     let name = d.display_name();
     if d.is_new() {
@@ -2696,6 +3379,111 @@ fn device_cell(ui: &mut egui::Ui, d: &Device, actions: &mut Vec<UiAction>) {
     } else {
         ui.label(name);
     }
+}
+
+/// The dashboard: one card per device, with big relay buttons, the light colour and the main
+/// values. (TODO: let the user choose the values shown on the cards.)
+fn dashboard(ui: &mut egui::Ui, rows: &[&Device], actions: &mut Vec<UiAction>) {
+    egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        ui.add_space(6.0);
+        // Cards are 220 + margins wide: as many per row as fit.
+        let per_row = ((ui.available_width() + 10.0) / 256.0).floor().max(1.0) as usize;
+        for chunk in rows.chunks(per_row) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = vec2(10.0, 10.0);
+                for d in chunk {
+                    dashboard_card(ui, d, actions);
+                }
+            });
+            ui.add_space(10.0);
+        }
+    });
+}
+
+fn dashboard_card(ui: &mut egui::Ui, d: &Device, actions: &mut Vec<UiAction>) {
+    let online = d.is_online();
+    let fill = if d.is_new() { NEW_TINT } else { ui.visuals().faint_bg_color };
+    egui::Frame::group(ui.style())
+        .fill(fill)
+        .corner_radius(10)
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.set_width(220.0);
+            ui.set_min_height(118.0);
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    signal_icon(ui, d);
+                    if d.http_host.is_some() {
+                        chip(ui, "HTTP", ORANGE);
+                    }
+                    let name = RichText::new(d.display_name()).strong().size(15.0);
+                    ui.add(egui::Label::new(if online { name } else { name.weak().italics() }).truncate());
+                });
+                let sub = if let Some(l) = d.offline_label() {
+                    l.to_string()
+                } else {
+                    d.telemetry()
+                        .or_else(|| d.current_uptime().map(|u| format!("up {}", device::format_duration(u))))
+                        .unwrap_or_default()
+                };
+                ui.label(RichText::new(sub).weak());
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    let n = d.power.len();
+                    let w = if n <= 1 { 140.0 } else if n == 2 { 96.0 } else { 46.0 };
+                    for (i, p) in d.power.iter().enumerate() {
+                        let on = *p == Some(true);
+                        let label = match (n, on) {
+                            (1, true) => "ON".to_string(),
+                            (1, false) => "OFF".to_string(),
+                            _ => format!("{}", i + 1),
+                        };
+                        let b = egui::Button::new(RichText::new(label).strong().size(16.0).color(if on { Color32::BLACK } else { ui.visuals().text_color() }))
+                            .fill(if on { GREEN } else { ui.visuals().widgets.inactive.bg_fill })
+                            .min_size(vec2(w, 40.0))
+                            .corner_radius(8);
+                        if ui.add_enabled(online, b).clicked() {
+                            actions.push(UiAction::Toggle(d.topic.clone(), i));
+                        }
+                    }
+                    if let Some(l) = &d.light {
+                        let (r, g, b) = l.swatch();
+                        let sw = egui::Button::new("").fill(Color32::from_rgb(r, g, b)).min_size(vec2(40.0, 40.0)).corner_radius(8);
+                        if ui.add_enabled(online, sw).on_hover_text("Colour and brightness").clicked() {
+                            actions.push(UiAction::OpenLight(d.topic.clone()));
+                        }
+                    }
+                });
+            });
+        });
+}
+
+/// Windows: the system's own fonts (Segoe UI, Consolas) for text. egui's thin built-in font
+/// looks jagged there at 100 % scaling. egui's fonts stay as fallback (symbols, emoji).
+fn system_fonts(ctx: &egui::Context) {
+    if !cfg!(windows) {
+        return;
+    }
+    let dir = std::env::var_os("WINDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "C:\\Windows".into())
+        .join("Fonts");
+    let mut fonts = egui::FontDefinitions::default();
+    for (file, name, family) in [
+        ("segoeui.ttf", "system-ui", egui::FontFamily::Proportional),
+        ("consola.ttf", "system-mono", egui::FontFamily::Monospace),
+    ] {
+        let Ok(bytes) = std::fs::read(dir.join(file)) else {
+            continue;
+        };
+        fonts
+            .font_data
+            .insert(name.into(), Arc::new(egui::FontData::from_owned(bytes)));
+        if let Some(list) = fonts.families.get_mut(&family) {
+            list.insert(0, name.into());
+        }
+    }
+    ctx.set_fonts(fonts);
 }
 
 fn is_upgrading(d: &Device) -> bool {

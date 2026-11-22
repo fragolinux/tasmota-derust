@@ -8,6 +8,9 @@ use std::sync::mpsc;
 use super::*;
 
 const STEPS: &[&str] = &[
+    "dashboard",
+    "find",
+    "selection",
     "home",
     "health",
     "firmware",
@@ -70,6 +73,9 @@ impl DerustApp {
             self.wifi_open = None;
             self.backup_open = None;
             self.consoles.clear();
+            self.search_open = None;
+            self.confirm = None;
+            self.selected.clear();
             self.changelog = None;
             self.about_open = false;
             ctx.set_theme(theme_pref(&self.cfg.theme));
@@ -82,6 +88,38 @@ impl DerustApp {
 
         if !s.waiting {
             match STEPS[s.step] {
+                "dashboard" => self.cfg.view = View::Dashboard,
+                "find" => {
+                    // The simulator's HTTP-only devices.
+                    self.cfg.view = View::Home;
+                    if self.search_open.is_none() {
+                        self.search_open = Some(SearchWindow {
+                            range: "127.0.0.1:18081-18084".into(),
+                            ..Default::default()
+                        });
+                        if let Ok(hosts) = http_dev::hosts("127.0.0.1:18081-18084") {
+                            let found = http_dev::scan(&hosts, None, &Default::default());
+                            for f in &found {
+                                self.store.add_http(&f.host, f.status.as_ref(), None);
+                            }
+                            if let Some(w) = &mut self.search_open {
+                                w.message = Some(format!("{} Tasmota found; {} reached over HTTP only, added to the list.", found.len(), found.len()));
+                            }
+                        }
+                    }
+                }
+                "selection" => {
+                    self.cfg.view = View::Firmware;
+                    if self.confirm.is_none() {
+                        let keys: Vec<String> = ["vecchio_interruttore", "presa_esp32", "http:127.0.0.1:18081"]
+                            .iter()
+                            .filter(|k| self.store.devices.contains_key(**k))
+                            .map(|k| k.to_string())
+                            .collect();
+                        self.selected.extend(keys.iter().cloned());
+                        self.confirm = Some(Confirm::UpgradeMany(keys));
+                    }
+                }
                 "home" => self.cfg.view = View::Home,
                 "health" => self.cfg.view = View::Health,
                 "firmware" => self.cfg.view = View::Firmware,
@@ -164,6 +202,7 @@ impl DerustApp {
                             step: None,
                             commands: Vec::new(),
                             resent: false,
+                            auto: false,
                         });
                     }
                 }

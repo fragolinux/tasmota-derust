@@ -119,6 +119,12 @@ pub fn router(
             "/api/devices/{topic}/console",
             get(api_console).post(api_console_send),
         )
+        .route("/api/search", get(api_search_range).post(api_search))
+        .route("/api/upgrade-many", post(api_upgrade_many))
+        .route("/api/enable-mqtt", get(api_mqtt_defaults).post(api_enable_mqtt))
+        .route("/api/devices/{topic}/http-password", post(api_http_password))
+        .route("/api/ota", get(api_ota).post(api_set_ota))
+        .route("/api/devices/{topic}/ota", get(api_device_ota).post(api_set_device_ota))
         .route(
             "/api/console/favourites",
             get(api_favourites).post(api_set_favourites),
@@ -524,10 +530,12 @@ pub fn standalone_main(read_only: bool) {
         cfg.web_https = v != "0" && v != "false";
     }
     let mut listen = env("DERUST_LISTEN");
+    let mut open_browser = env("DERUST_NO_BROWSER").is_none();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--listen" => listen = args.next().or(listen),
+            "--no-browser" => open_browser = false,
             "--https" => cfg.web_https = true,
             "--http" => cfg.web_https = false,
             // Read-only is this program's only mode; kept so old scripts keep working.
@@ -541,10 +549,12 @@ pub fn standalone_main(read_only: bool) {
                      looks, run tasmota-derust-web instead."
                 };
                 println!(
-                    "Usage: {name} [--https | --http] [--listen ADDRESS:PORT]\n\n{other}\n\n\
+                    "Usage: {name} [--https | --http] [--listen ADDRESS:PORT] [--no-browser]\n\n{other}\n\n\
                      --https serves HTTPS with a self-signed certificate (default port 8443),\n\
                      --http plain HTTP (default port 8080). Without either, the desktop app's\n\
-                     setting is used (or DERUST_WEB_HTTPS=1/0)."
+                     setting is used (or DERUST_WEB_HTTPS=1/0).\n\
+                     The page opens in the default browser when there is a screen; --no-browser\n\
+                     (or DERUST_NO_BROWSER=1) leaves it closed, e.g. on a server or as a service."
                 );
                 std::process::exit(0);
             }
@@ -618,10 +628,23 @@ pub fn standalone_main(read_only: bool) {
             "no login"
         };
         let https = tls.is_some();
-        println!(
-            "Tasmota Derust web on {}  ({mode}, {login})",
-            browser_url(listen, https)
-        );
+        let url = browser_url(listen, https);
+        println!("Tasmota Derust web on {url}  ({mode}, {login})");
+        let click = if cfg!(target_os = "macos") {
+            "Cmd-click"
+        } else {
+            "Ctrl-click"
+        };
+        println!("Open it in a browser: {click} the address above, or copy it into the address bar.");
+        // The default browser, when this runs on a computer with a screen and a terminal
+        // (not as a service or on a headless server).
+        if open_browser && has_screen() {
+            let u = url.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let _ = open::that(u);
+            });
+        }
         if let Some(t) = &tls {
             println!("Certificate: {}", t.cert_path.display());
         }
@@ -645,6 +668,19 @@ pub fn standalone_main(read_only: bool) {
             None => axum::serve(listener, app).await.unwrap(),
         }
     });
+}
+
+/// A screen and someone in front of it: macOS and Windows from a terminal, Linux with a
+/// graphical session. Not when started as a service (no terminal).
+fn has_screen() -> bool {
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() {
+        return false;
+    }
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        return true;
+    }
+    std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
 /// Release notes of a Tasmota Derust version (fetched from GitHub by the server).
@@ -688,7 +724,6 @@ fn reply(st: &AppState, r: Result<(), CommandError>) -> Response {
         Err(
             CommandError::Offline
             | CommandError::UpgradeRunning
-            | CommandError::OtherUpgradeRunning
             | CommandError::UpgradeNotPossible
             | CommandError::NotOfficialOtaUrl
             | CommandError::NotALight
@@ -700,7 +735,9 @@ fn reply(st: &AppState, r: Result<(), CommandError>) -> Response {
             | CommandError::OptionBlocked
             | CommandError::BadOption
             | CommandError::Wifi(_)
-            | CommandError::Console(_),
+            | CommandError::Console(_)
+            | CommandError::NotHttp
+            | CommandError::BadMqttSettings,
         ) => StatusCode::BAD_REQUEST,
     };
     (code, r.unwrap_err().message()).into_response()
@@ -800,6 +837,144 @@ async fn api_console_send(
     Json(body): Json<ConsoleBody>,
 ) -> Response {
     reply(&st, st.session.console_send(&topic, &body.line, body.confirm))
+}
+
+#[derive(Serialize)]
+struct RangeReply {
+    range: Option<String>,
+}
+
+/// The server's own network (address and netmask), offered as the search range.
+async fn api_search_range() -> Json<RangeReply> {
+    Json(RangeReply {
+        range: tasmota_derust_core::http_dev::local_range(),
+    })
+}
+
+#[derive(Deserialize)]
+struct SearchBody {
+    #[serde(default)]
+    range: String,
+    #[serde(default)]
+    password: String,
+}
+
+/// Searches the network for Tasmota devices over HTTP (read-only: Status 0 to each address).
+async fn api_search(State(st): State<AppState>, Json(b): Json<SearchBody>) -> Response {
+    let pw = Some(b.password).filter(|p| !p.is_empty());
+    match st.session.search(&b.range, pw) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.message()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct TopicsBody {
+    topics: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct Failure {
+    topic: String,
+    error: &'static str,
+}
+
+fn failures(v: Vec<(String, CommandError)>) -> Json<Vec<Failure>> {
+    Json(
+        v.into_iter()
+            .map(|(topic, e)| Failure {
+                topic,
+                error: e.message(),
+            })
+            .collect(),
+    )
+}
+
+/// Upgrades several devices at once, each on its own (the path steps follow by themselves).
+async fn api_upgrade_many(State(st): State<AppState>, Json(b): Json<TopicsBody>) -> Response {
+    if st.session.read_only() {
+        return reply(&st, Err(CommandError::ReadOnly));
+    }
+    failures(st.session.upgrade_many(&b.topics)).into_response()
+}
+
+async fn api_mqtt_defaults(State(st): State<AppState>) -> Json<tasmota_derust_core::session::MqttDefaults> {
+    Json(st.session.broker_settings())
+}
+
+#[derive(Deserialize)]
+struct EnableMqttBody {
+    topics: Vec<String>,
+    host: String,
+    port: u16,
+    #[serde(default)]
+    user: String,
+    /// None: the app's own broker password (never sent to the page).
+    #[serde(default)]
+    password: Option<String>,
+}
+
+/// Connects HTTP-only devices to the broker (MqttHost, MqttPort, MqttUser, MqttPassword).
+async fn api_enable_mqtt(State(st): State<AppState>, Json(b): Json<EnableMqttBody>) -> Response {
+    if st.session.read_only() {
+        return reply(&st, Err(CommandError::ReadOnly));
+    }
+    failures(st.session.enable_mqtt(
+        &b.topics,
+        &b.host,
+        b.port,
+        &b.user,
+        b.password.as_deref(),
+    ))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct PasswordBody {
+    password: String,
+}
+
+async fn api_http_password(
+    State(st): State<AppState>,
+    Path(topic): Path<String>,
+    Json(b): Json<PasswordBody>,
+) -> Response {
+    reply(&st, st.session.set_http_password(&topic, &b.password))
+}
+
+use tasmota_derust_core::ota_policy::{self, DeviceOta, OtaSettings};
+
+async fn api_ota() -> Json<OtaSettings> {
+    Json(ota_policy::default_settings())
+}
+
+/// Firmware server and highest version for every device. Not in read-only mode.
+async fn api_set_ota(State(st): State<AppState>, Json(o): Json<OtaSettings>) -> Response {
+    if st.session.read_only() {
+        return reply(&st, Err(CommandError::ReadOnly));
+    }
+    match ota_policy::set_default(o) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.message()).into_response(),
+    }
+}
+
+async fn api_device_ota(Path(topic): Path<String>) -> Json<DeviceOta> {
+    Json(ota_policy::device(&topic))
+}
+
+async fn api_set_device_ota(
+    State(st): State<AppState>,
+    Path(topic): Path<String>,
+    Json(o): Json<DeviceOta>,
+) -> Response {
+    if st.session.read_only() {
+        return reply(&st, Err(CommandError::ReadOnly));
+    }
+    match ota_policy::set_device(&topic, o) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e.message()).into_response(),
+    }
 }
 
 async fn api_favourites() -> Json<Vec<tasmota_derust_core::console::Favourite>> {

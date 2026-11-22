@@ -206,7 +206,7 @@ dialog dt { color: var(--muted); } dialog dd { margin: 0; word-break: break-all;
 .dlg-buttons .primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 a.btn.primary { display: inline-block; background: var(--accent); color: #fff; border-color: var(--accent); text-decoration: none; }
 #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--text); color: var(--bg);
-  padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
+  padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .5s; pointer-events: none; max-width: 90vw; }
 #toast.show { opacity: .95; }
 
 /* Device tools, Wi-Fi, password */
@@ -254,6 +254,7 @@ dialog#optDlg { max-width: min(760px, calc(100vw - 24px)); width: 760px; padding
 .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 .gear { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 14px; }
 .gear:hover { color: var(--accent); }
+.slot { display: inline-flex; width: 20px; justify-content: center; flex: none; }
 .gear.con svg { width: 16px; height: 16px; vertical-align: -3px; }
 /* Device sheet: square console button beside the name and status lines. */
 .sheet-top { display: flex; align-items: stretch; gap: 12px; }
@@ -288,6 +289,31 @@ dialog#favDlg { width: min(680px, calc(100vw - 24px)); max-width: none; }
 .fav-row input { border: 1px solid var(--border); background: var(--panel-2); color: var(--text); padding: 6px 8px;
   border-radius: 6px; font: inherit; min-width: 0; }
 .fav-row input.cmd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+.chip.http { background: var(--orange); color: #1d1f23; font-size: 11px; font-weight: 700; margin-left: 2px; }
+.sel { width: 16px; height: 16px; margin: 0 2px 0 0; flex: none; }
+#selBar { display: none; position: sticky; top: 0; z-index: 4; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding: 8px 16px; background: var(--panel-2); border-bottom: 1px solid var(--border); }
+#selBar.on { display: flex; }
+.dash { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; padding: 12px 0; }
+.dcard { min-width: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 12px; min-height: 120px;
+  display: flex; flex-direction: column; gap: 6px; }
+.dcard.offline { opacity: .55; }
+.dcard.new { background: rgba(242, 194, 27, .22); }
+.dcard .dname { font-weight: 600; font-size: 16px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.dcard .dname span.n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dcard .dsub { color: var(--muted); font-size: 13px; min-height: 18px; }
+.dcard .dbtns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; }
+.dcard .relay { height: 46px; min-width: 46px; flex: 1; font-size: 16px; border-radius: 10px; }
+.dcard .swatch { width: 46px; height: 46px; border-radius: 10px; flex: none; }
+.form-row { display: grid; grid-template-columns: 130px 1fr; gap: 6px 10px; align-items: center; margin: 6px 0; }
+.form-row input { width: 100%; border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  padding: 6px 8px; border-radius: 6px; font: inherit; min-width: 0; }
+.progress { height: 8px; border-radius: 4px; background: var(--panel-2); overflow: hidden; margin: 8px 0; }
+.progress > div { height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+@media (max-width: 760px) { .form-row { grid-template-columns: 1fr; }
+  .dash { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 8px 0; }
+  .dcard { padding: 10px; min-height: 110px; min-width: 0; } .dcard .dname { font-size: 15px; }
+  .dcard .relay { min-width: 0; height: 42px; } .dcard .swatch { width: 42px; height: 42px; } }
 .forget-all { display: flex; justify-content: center; padding: 16px 0 8px; }
 @media (max-width: 760px) {
   dialog#optDlg, dialog#conDlg { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 16px 16px 0 0; border: 0; }
@@ -336,6 +362,7 @@ dialog#favDlg { width: min(680px, calc(100vw - 24px)); max-width: none; }
   <div class="mtools m-only">
     <input type="search" id="msearch" placeholder="Search" autocomplete="off" enterkeyhint="search">
     <button class="pill" id="mOffline">Offline</button>
+    <button class="pill" id="mSelect" title="Tick devices to upgrade them together or connect HTTP-only ones to MQTT">Select</button>
     <select class="pill" id="msort" aria-label="Sort by"></select>
   </div>
   <nav class="tabs d-only" id="tabs"></nav>
@@ -348,12 +375,14 @@ dialog#favDlg { width: min(680px, calc(100vw - 24px)); max-width: none; }
       <div class="menu-body" id="colsBody"></div>
     </details>
     <button class="btn" id="refresh" title="Ask every online device for its full status">Refresh</button>
+    <button class="btn" id="findBtn" title="Search the local network for Tasmota devices over HTTP, also those without MQTT">Find devices…</button>
     <button class="btn" id="settings" title="Theme, MQTT broker, read-only mode, login, HTTPS">Settings</button>
     <span class="spacer"></span>
     <span class="info" id="counts"></span>
   </div>
 </header>
 <div id="banner"></div>
+<div id="selBar"></div>
 <main id="main"><div class="empty">Loading…</div></main>
 <nav class="bnav m-only" id="bnav"></nav>
 <dialog id="sheet" class="sheet"><div class="sheet-inner" id="sheetBody"></div></dialog>
@@ -420,6 +449,7 @@ dialog#favDlg { width: min(680px, calc(100vw - 24px)); max-width: none; }
     <button class="btn" data-tool="wifi">Wi-Fi networks</button>
     <button class="btn" data-tool="backup">Back up configuration</button>
     <button class="btn" data-tool="restore">Restore configuration…</button>
+    <button class="btn" data-tool="ota">Firmware source…</button>
     <button class="btn" data-tool="restart">Restart</button>
   </div>
   <p class="hint">Backup and restore use the device's own web server (the same file as its
@@ -494,6 +524,7 @@ const COLS = {
   group_topic:    { t: "GroupTopic" },
 };
 const VIEWS = {
+  dashboard: { t: "Dashboard", cols: [] },
   home:     { t: "Home",     cols: ["power", "telemetry", "module", "uptime", "rssi"] },
   health:   { t: "Health",   cols: ["uptime", "boot_count", "restart_reason", "load_avg", "sleep", "mqtt_count", "link_count", "downtime", "rssi"] },
   firmware: { t: "Firmware", cols: ["version_short", "update", "core", "sdk", "program_size", "free", "ota_url"] },
@@ -507,8 +538,12 @@ const store = {
   set(k, v) { try { localStorage.setItem("derust." + k, JSON.stringify(v)); } catch {} },
 };
 const ui = {
-  view: store.get("view", "home"),
-  showOffline: store.get("showOffline", false),
+  // Opens on the dashboard.
+  view: "dashboard",
+  selected: new Set(),
+  selecting: false,
+  // Offline devices hidden at every start.
+  showOffline: false,
   sort: store.get("sort", { col: null, desc: false }),
   search: "",
 };
@@ -554,6 +589,26 @@ function bars(d) {
 }
 
 const STAR = `<span class="star" title="Started in the last 5 minutes (plugged in or restarted)" aria-label="New">★</span> `;
+
+// Before the name, in fixed slots so names line up: remove (offline) or tools, then console.
+function slotsHtml(d) {
+  const t = esc(d.topic);
+  const first = d.online === false
+    ? `<button class="gear" data-act="forget" data-topic="${t}" title="${d.http ? "Remove this offline device from the list" : "Remove this offline device from the list and from the broker (its retained messages), or it comes back"}" aria-label="Remove device">✕</button>`
+    : d.online === true || d.online == null && !d.http
+      ? `<button class="gear" data-act="tools" data-topic="${t}" title="SetOptions, Wi-Fi networks, backup, restart" aria-label="Device tools">⚙</button>` : "";
+  return `<span class="slot">${first}</span><span class="slot"><button class="gear con" data-act="console" data-topic="${t}" title="Console: this device's MQTT messages, send commands" aria-label="Console">${svg(CONSOLE_ICON)}</button></span>`;
+}
+
+function httpHtml(d) {
+  if (!d.http) return "";
+  return `<span class="chip http" title="Reached over HTTP only, not over MQTT: tick it and use Enable MQTT to connect it to the broker">HTTP</span>` +
+    (d.http_locked ? ` <button class="btn" data-act="httppw" data-topic="${esc(d.topic)}" style="padding:1px 6px;font-size:12px">Password…</button>` : "");
+}
+
+function selHtml(d) {
+  return `<input type="checkbox" class="sel" data-sel="${esc(d.topic)}" ${ui.selected.has(d.topic) ? "checked" : ""} aria-label="Tick ${esc(d.name)}">`;
+}
 
 function nameHtml(d) {
   const star = d.new ? STAR : "";
@@ -734,12 +789,48 @@ function render() {
       `<div class="empty">${data.connected ? (data.devices.length ? "No devices match." : "Waiting for Tasmota devices…") : "Not connected to the MQTT broker."}</div>`;
     return;
   }
+  renderSelBar();
+  if (ui.view === "dashboard") {
+    // Quick controls: only devices that answer.
+    const on = list.filter(d => d.online === true || d.upgrading);
+    main.innerHTML = on.length ? renderDashboard(on) : `<div class="empty">No device online.</div>`;
+    return;
+  }
   if (narrow.matches) { main.innerHTML = renderMobile(list); return; }
 
   const prev = main.querySelector(".table-wrap");
   const scroll = prev ? [prev.scrollLeft, prev.scrollTop] : null;
   main.innerHTML = renderTable(list);
   if (scroll) { const w = main.querySelector(".table-wrap"); w.scrollLeft = scroll[0]; w.scrollTop = scroll[1]; }
+}
+
+// Dashboard: one card per device, big relay buttons, the light colour and the main values.
+// TODO: let the user choose which values the cards show.
+function renderDashboard(list) {
+  return `<div class="dash">` + list.map(d => {
+    const off = d.online === false;
+    const sub = off ? offLabel(d) : (d.telemetry || (d.uptime != null ? "up " + fmtShort(d.uptime) : ""));
+    const sel = ui.selecting || !narrow.matches ? selHtml(d) : "";
+    return `<div class="dcard${off ? " offline" : ""}${d.new ? " new" : ""}" data-topic="${esc(d.topic)}">
+      <div class="dname">${sel}${bars(d)}${httpHtml(d)}<span class="n">${d.new ? STAR : ""}${esc(d.name)}</span></div>
+      <div class="dsub">${esc(sub)}</div>
+      <div class="dbtns">${relaysHtml(d, true)}</div></div>`;
+  }).join("") + `</div>`;
+}
+
+// "N ticked": group upgrade, Enable MQTT for the HTTP-only ones.
+function renderSelBar() {
+  for (const t of [...ui.selected]) if (!byTopic(t)) ui.selected.delete(t);
+  const bar = $("selBar");
+  const n = ui.selected.size;
+  bar.classList.toggle("on", n > 0 || ui.selecting);
+  if (!(n > 0 || ui.selecting)) { bar.innerHTML = ""; return; }
+  const http = [...ui.selected].filter(t => byTopic(t)?.http).length;
+  bar.innerHTML = `<b>${n} ticked</b>
+    <button class="btn" id="selUpgrade" ${n ? "" : "disabled"}>Upgrade…</button>
+    <button class="btn" id="selMqtt" ${http ? "" : "disabled"}>Enable MQTT (${http})…</button>
+    <button class="btn" id="selAll">Tick all shown</button>
+    <button class="btn" id="selNone">Untick all</button>`;
 }
 
 function renderTable(list) {
@@ -750,7 +841,7 @@ function renderTable(list) {
   for (const c of cols) h += `<th data-sort="${c}" ${arrow(c)}>${COLS[c].t}</th>`;
   h += `</tr></thead><tbody>`;
   for (const d of list) {
-    h += `<tr class="${d.online === false ? "offline" : ""}${d.new ? " new" : ""}" ${d.upgrading && d.online === false ? 'title="Upgrading: restarting…"' : ""}><td><span class="devname">${bars(d)}${nameHtml(d)}${d.online !== false && !docMode.bare ? `<button class="gear" data-act="tools" data-topic="${esc(d.topic)}" title="SetOptions, Wi-Fi networks, backup" aria-label="Device tools">⚙</button>` : ""}${!docMode.bare ? `<button class="gear con" data-act="console" data-topic="${esc(d.topic)}" title="Console: this device's MQTT messages, send commands" aria-label="Console">${svg(CONSOLE_ICON)}</button>` : ""}${d.online === false && !docMode.bare ? `<button class="gear" data-act="forget" data-topic="${esc(d.topic)}" title="Remove this offline device from the list" aria-label="Remove device">✕</button>` : ""}</span></td>`;
+    h += `<tr class="${d.online === false ? "offline" : ""}${d.new ? " new" : ""}" ${d.upgrading && d.online === false ? 'title="Upgrading: restarting…"' : ""}><td><span class="devname">${docMode.bare ? "" : selHtml(d)}${bars(d)}${docMode.bare ? "" : slotsHtml(d)}${httpHtml(d)}${nameHtml(d)}</span></td>`;
     for (const c of cols) h += `<td class="${COLS[c].num && !["rssi", "ap"].includes(c) ? "num" : ""}">${cellHtml(d, c)}</td>`;
     h += `</tr>`;
   }
@@ -759,6 +850,7 @@ function renderTable(list) {
 
 // ---------------------------------------------------------------- phone layout
 const ICONS = {
+  dashboard: `<rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/>`,
   home: `<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>`,
   health: `<path d="M3 12h4l3-8 4 16 3-8h4"/>`,
   firmware: `<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>`,
@@ -801,8 +893,8 @@ function renderMobile(list) {
     `<div class="mlist">` + list.map(d => {
       const p = rowParts(d);
       return `<div class="mrow ${d.online === false ? "offline" : ""}${d.new ? " new" : ""}" data-topic="${esc(d.topic)}">
-        ${bars(d)}
-        <div class="mid"><div class="mname">${d.new ? STAR : ""}${esc(d.name)}</div><div class="msub">${p.raw ? p.sub : esc(p.sub)}</div></div>
+        ${ui.selecting ? selHtml(d) : ""}${bars(d)}
+        <div class="mid"><div class="mname">${d.new ? STAR : ""}${httpHtml(d)} ${esc(d.name)}</div><div class="msub">${p.raw ? p.sub : esc(p.sub)}</div></div>
         <div class="mright">${p.right}</div></div>`;
     }).join("") + `</div>` + forgetAllHtml();
 }
@@ -861,7 +953,9 @@ function renderSheet() {
   if (!off) h += `<button class="btn" data-act="wifi" data-topic="${esc(d.topic)}">Wi-Fi networks</button>
     <button class="btn" data-act="backup" data-topic="${esc(d.topic)}">Back up</button>
     <button class="btn" data-act="restore" data-topic="${esc(d.topic)}">Restore</button>
-    <button class="btn" data-act="restart" data-topic="${esc(d.topic)}">Restart</button>`;
+    <button class="btn" data-act="restart" data-topic="${esc(d.topic)}">Restart</button>
+    <button class="btn" data-act="ota" data-topic="${esc(d.topic)}">Firmware source</button>`;
+  if (d.http_locked) h += `<button class="btn" data-act="httppw" data-topic="${esc(d.topic)}">Web password…</button>`;
   if (off) h += `<button class="btn" data-act="forget" data-topic="${esc(d.topic)}">Remove from list</button>`;
   h += updateHtml(d) + `</div>`;
   for (const [title, cols] of SECTIONS) {
@@ -899,9 +993,9 @@ function confirmDialog(title, bodyHtml, okLabel, noCancel = false) {
   });
 }
 
-function toast(msg) {
+function toast(msg, ms = 3500) {
   const t = $("toast"); t.textContent = msg; t.classList.add("show");
-  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("show"), 3500);
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("show"), ms);
 }
 
 async function post(url, method = "POST") {
@@ -926,6 +1020,8 @@ async function onAction(btn) {
   if (btn.dataset.act === "tools") return openTools(t);
   if (btn.dataset.act === "console") return openConsole(t);
   if (btn.dataset.act === "restart") return restartDevice(t);
+  if (btn.dataset.act === "ota") return openOta(t);
+  if (btn.dataset.act === "httppw") return askHttpPassword(t);
   if (btn.dataset.act === "wifi") return openWifi(t);
   if (btn.dataset.act === "backup") return backupDevice(t);
   if (btn.dataset.act === "restore") return pickRestore(t);
@@ -1089,9 +1185,21 @@ async function showSettings() {
          : "Plain HTTP without TLS: the login and all traffic travel in clear text on the network."}</p>
        <p style="color:var(--muted)">HTTPS is turned on in the desktop app's Settings, or with --https
        (DERUST_WEB_HTTPS=1).</p>` : "";
+  let ota = { custom_url: "", max_version: "" };
+  try { ota = await (await fetch("/api/ota", { cache: "no-store" })).json(); } catch {}
+  const fw = `<p><b>Firmware</b> (for every device; a device's Firmware source can differ)</p>
+    <div class="form-row"><label for="otaUrl">Firmware server</label><input id="otaUrl" value="${esc(ota.custom_url)}" placeholder="official (empty), or http://server/{build}.bin.gz"></div>
+    <div class="form-row"><label for="otaMax">Highest version</label><input id="otaMax" value="${esc(ota.max_version)}" placeholder="latest (empty), or e.g. 11.1.0"></div>
+    <p style="color:var(--muted)">{build} becomes the device's build (tasmota, tasmota-sensors, tasmota32c3…). The version on your own server can't be checked: upgrades install what it serves. The highest version applies to the official server.</p>
+    <button class="btn" id="otaSave">Save firmware settings</button> <span id="otaMsg"></span>`;
   const dlg = $("dlg");
-  const closed = confirmDialog("Settings", `<div class="about">${theme}<hr>${broker}</div>`, "Close", true);
-  dlg.onclick = e => {
+  const closed = confirmDialog("Settings", `<div class="about">${theme}<hr>${fw}<hr>${broker}</div>`, "Close", true);
+  dlg.onclick = async e => {
+    if (e.target.id === "otaSave") {
+      const r = await jsonPost("/api/ota", { custom_url: $("otaUrl").value, max_version: $("otaMax").value });
+      $("otaMsg").textContent = r.ok ? "Saved." : r.text;
+      return;
+    }
     const b = e.target.closest("[data-theme-set]");
     if (!b) return;
     store.set("theme", b.dataset.themeSet); applyTheme(b.dataset.themeSet);
@@ -1179,9 +1287,18 @@ document.addEventListener("click", e => {
   const tab = e.target.closest("[data-view]");
   if (tab) {
     ui.view = tab.dataset.view; store.set("view", ui.view); $("colsMenu").open = false;
+    if (ui.view === "dashboard" && ui.showOffline) toast("The dashboard shows online devices only", 2500);
     renderHeader(); render(); if (narrow.matches) window.scrollTo(0, 0); return;
   }
   if (e.target.id === "sheetClose") { $("sheet").close(); return; }
+  if (e.target.id === "findBtn") { openFind(); return; }
+  if (e.target.id === "mSelect") { ui.selecting = !ui.selecting; if (!ui.selecting) ui.selected.clear(); render(); return; }
+  if (e.target.id === "selNone") { ui.selected.clear(); ui.selecting = false; render(); return; }
+  if (e.target.id === "selAll") { visibleDevices().forEach(d => ui.selected.add(d.topic)); render(); return; }
+  if (e.target.id === "selUpgrade") { upgradeMany(); return; }
+  if (e.target.id === "selMqtt") { enableMqtt(); return; }
+  const sel = e.target.closest("[data-sel]");
+  if (sel) { if (sel.checked) ui.selected.add(sel.dataset.sel); else ui.selected.delete(sel.dataset.sel); renderSelBar(); return; }
   const th = e.target.closest("th[data-sort]");
   if (th) {
     const c = th.dataset.sort || null;
@@ -1192,8 +1309,10 @@ document.addEventListener("click", e => {
   if (act && !act.disabled) { onAction(act); return; }
   if (e.target.closest("[data-forget-all]")) { forgetAll(); return; }
   // Tapping a phone row opens its sheet, but not when the tap was on a relay, AP chips or a link.
+  const card = narrow.matches && e.target.closest(".dcard[data-topic]");
+  if (card && !e.target.closest("button, a, input")) { openSheet(card.dataset.topic); return; }
   const row = e.target.closest(".mrow[data-topic]");
-  if (row && !e.target.closest("button, a, .ap")) { openSheet(row.dataset.topic); return; }
+  if (row && !e.target.closest("button, a, .ap, input")) { openSheet(row.dataset.topic); return; }
   if (e.target.id === "colsReset") { store.set("cols." + ui.view, null); renderHeader(); render(); return; }
   const menu = $("colsMenu");
   if (menu.open && !menu.contains(e.target)) menu.open = false;
@@ -1204,7 +1323,10 @@ $("colsBody").addEventListener("change", e => {
   if (e.target.checked) { if (!cols.includes(c)) cols.push(c); } else cols = cols.filter(x => x !== c);
   store.set("cols." + ui.view, cols); render();
 });
-$("showOffline").addEventListener("change", e => { ui.showOffline = e.target.checked; store.set("showOffline", ui.showOffline); render(); });
+$("showOffline").addEventListener("change", e => {
+  ui.showOffline = e.target.checked; render();
+  if (ui.showOffline && ui.view === "dashboard") toast("The dashboard shows online devices only", 2500);
+});
 $("search").addEventListener("input", e => { ui.search = e.target.value; render(); });
 $("refresh").addEventListener("click", () => post("/api/refresh"));
 $("mRefresh").addEventListener("click", () => { toast("Asking devices for status…"); post("/api/refresh"); });
@@ -1212,7 +1334,8 @@ $("msearch").addEventListener("input", e => { ui.search = e.target.value; $("sea
 $("search").addEventListener("input", e => { $("msearch").value = e.target.value; });
 $("roTag").addEventListener("click", readOnlyNotice);
 $("mOffline").addEventListener("click", () => {
-  ui.showOffline = !ui.showOffline; store.set("showOffline", ui.showOffline); $("showOffline").checked = ui.showOffline; render();
+  ui.showOffline = !ui.showOffline; $("showOffline").checked = ui.showOffline; render();
+  if (ui.showOffline && ui.view === "dashboard") toast("The dashboard shows online devices only", 2500);
 });
 $("msort").addEventListener("change", e => {
   const c = e.target.value || null;
@@ -1535,6 +1658,119 @@ async function restartDevice(topic) {
   toast(`${d.name} is restarting`);
 }
 
+// POST a JSON body; { ok, status, text, json }.
+async function jsonPost(url, body) {
+  try {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const text = await r.text();
+    let json = null; try { json = JSON.parse(text); } catch {}
+    return { ok: r.ok, status: r.status, text: text || `Error ${r.status}`, json };
+  } catch { return { ok: false, status: 0, text: "Server not reachable", json: null }; }
+}
+
+// ---------------------------------------------------------------- find devices (HTTP)
+async function openFind() {
+  const body = `<p>Asks every address of the network for its status over HTTP (read-only), to find Tasmota devices,
+    also those without MQTT. Those not on MQTT are added to the list, marked HTTP. Only devices that answer as
+    Tasmota are added: Shelly, routers and other web servers are left out.</p>
+    <div class="form-row"><label for="findRange">Addresses</label><input id="findRange" placeholder="e.g. 192.168.1.0/24, 192.168.1.20-80"></div>
+    <div class="form-row"><label for="findPw">Web password</label><input id="findPw" type="password" autocomplete="off" placeholder="only if your devices have one"></div>
+    <div class="progress"><div id="findBar"></div></div><div id="findMsg" style="color:var(--muted)"></div>`;
+  const dlg = $("dlg");
+  const done = confirmDialog("Find devices on the network", body, "Search");
+  // The server's own network (address and netmask).
+  try { const r = await (await fetch("/api/search", { cache: "no-store" })).json(); if (r.range) $("findRange").value = r.range; } catch {}
+  const show = () => {
+    const s = data && data.search; if (!s || !$("findBar")) return;
+    $("findBar").style.width = `${Math.round(100 * s.done / Math.max(1, s.total))}%`;
+    $("findMsg").textContent = s.running ? `${s.done} / ${s.total}` :
+      !s.tasmota ? "No Tasmota answered." : s.added ? `${s.tasmota} Tasmota found; ${s.added} reached over HTTP only, added to the list.` : `${s.tasmota} Tasmota found, all already on MQTT.`;
+  };
+  // The dialog stays open while it searches: Search starts it, Cancel closes.
+  $("dlgOk").onclick = async () => {
+    const r = await jsonPost("/api/search", { range: $("findRange").value, password: $("findPw").value });
+    if (!r.ok) { $("findMsg").textContent = r.text; return; }
+    const t = setInterval(async () => { await load(); show(); if (!dlg.open || (data.search && !data.search.running)) clearInterval(t); }, 700);
+  };
+  await done;
+}
+
+// ---------------------------------------------------------------- groups
+async function upgradeMany() {
+  if (data.read_only) return readOnlyNotice();
+  const devs = [...ui.selected].map(byTopic).filter(Boolean);
+  const rows = devs.map(d => {
+    const ok = d.online === true && ["step", "final"].includes(d.upgrade_plan.kind) && !(d.upgrade_plan.kind === "final" && d.up_to_date);
+    const why = d.online !== true ? "offline" : d.upgrade_plan.kind === "final" && d.up_to_date ? "up to date" : d.upgrade_plan.title;
+    return { d, ok, why };
+  });
+  const start = rows.filter(r => r.ok);
+  const body = `<p>Each device upgrades on its own, at the same time; a failure stops only that device. Old firmware
+    goes through the upgrade path, step after step, by itself.</p>` +
+    rows.map(r => `<p style="margin:4px 0"><b>${esc(r.d.name)}</b> <span style="color:var(--muted)">${r.ok ? "" : "skipped: "}${esc(r.why)}</span></p>`).join("") +
+    `<p style="color:var(--muted)">Do not power the devices off during the upgrade.</p>`;
+  if (!start.length) return confirmDialog("Nothing to upgrade", body, "OK", true);
+  if (!await confirmDialog(`Upgrade ${start.length} device${start.length > 1 ? "s" : ""}?`, body, "Upgrade")) return;
+  const r = await jsonPost("/api/upgrade-many", { topics: start.map(x => x.d.topic) });
+  if (!r.ok) return toast(r.text);
+  const failed = r.json || [];
+  toast(failed.length ? failed.map(f => `${byTopic(f.topic)?.name ?? f.topic}: ${f.error}`).join(" · ") : `Upgrade started on ${start.length} device(s).`);
+  setTimeout(load, 500);
+}
+
+async function enableMqtt() {
+  if (data.read_only) return readOnlyNotice();
+  const devs = [...ui.selected].map(byTopic).filter(d => d && d.http);
+  if (!devs.length) return;
+  let def = { host: "", port: 1883, user: "", has_password: false, loopback: false };
+  try { def = await (await fetch("/api/enable-mqtt", { cache: "no-store" })).json(); } catch {}
+  const body = `<p>Connect to the broker: ${devs.map(d => esc(d.name)).join(", ")}.</p>
+    <p style="color:var(--muted)">They get MQTT on (SetOption3 1), broker, port, user and password in one Backlog over HTTP, restart, and show up over MQTT.</p>
+    <div class="form-row"><label for="mqHost">Broker</label><input id="mqHost" value="${esc(def.host)}"></div>
+    <div class="form-row"><label for="mqPort">Port</label><input id="mqPort" value="${def.port}" inputmode="numeric"></div>
+    <div class="form-row"><label for="mqUser">User</label><input id="mqUser" value="${esc(def.user)}" autocomplete="off"></div>
+    <div class="form-row"><label for="mqPw">Password</label><input id="mqPw" type="password" autocomplete="new-password" placeholder="${def.has_password ? "empty: the server's broker password" : ""}"></div>
+    ${def.loopback ? `<p class="warn-text">${esc(def.host)} is the server's own machine: the devices need the broker's network address.</p>` : ""}
+    <p style="color:var(--muted)">The password travels over plain HTTP, like Tasmota's own web page.</p>`;
+  if (!await confirmDialog("Enable MQTT", body, "Send")) return;
+  const pw = $("mqPw").value;
+  const r = await jsonPost("/api/enable-mqtt", { topics: devs.map(d => d.topic), host: $("mqHost").value.trim(),
+    port: parseInt($("mqPort").value, 10) || 0, user: $("mqUser").value.trim(), password: pw ? pw : null });
+  if (!r.ok) return toast(r.text);
+  const failed = r.json || [];
+  toast(failed.length ? failed.map(f => `${byTopic(f.topic)?.name ?? f.topic}: ${f.error}`).join(" · ") : "MQTT settings sent: the devices restart and show up over MQTT.");
+  ui.selected.clear(); ui.selecting = false;
+  setTimeout(load, 500);
+}
+
+async function openOta(topic) {
+  const d = byTopic(topic); if (!d) return;
+  let o = { custom_url: null, max_version: null }, def = { custom_url: "", max_version: "" };
+  try { o = await (await fetch(`/api/devices/${encodeURIComponent(topic)}/ota`, { cache: "no-store" })).json(); } catch {}
+  try { def = await (await fetch("/api/ota", { cache: "no-store" })).json(); } catch {}
+  const body = `<label class="check"><input type="checkbox" id="oOwnUrl" ${o.custom_url != null ? "checked" : ""}> Own firmware server for this device</label>
+    <div class="form-row"><label for="oUrl">Server</label><input id="oUrl" value="${esc(o.custom_url ?? "")}" placeholder="empty: official; or http://server/{build}.bin.gz"></div>
+    <p style="color:var(--muted)">Default: ${esc(def.custom_url || "official server")}</p>
+    <label class="check"><input type="checkbox" id="oOwnMax" ${o.max_version != null ? "checked" : ""}> Own highest version for this device</label>
+    <div class="form-row"><label for="oMax">Highest version</label><input id="oMax" value="${esc(o.max_version ?? "")}" placeholder="empty: latest; or e.g. 11.1.0"></div>
+    <p style="color:var(--muted)">Default: ${esc(def.max_version || "latest")}</p>`;
+  if (!await confirmDialog(`${d.name} — Firmware source`, body, "Save")) return;
+  const r = await jsonPost(`/api/devices/${encodeURIComponent(topic)}/ota`, {
+    custom_url: $("oOwnUrl").checked ? $("oUrl").value : null,
+    max_version: $("oOwnMax").checked ? $("oMax").value : null });
+  toast(r.ok ? `${d.name}: firmware source saved.` : r.text);
+  setTimeout(load, 300);
+}
+
+async function askHttpPassword(topic) {
+  const body = `<p>The web password of ${esc(byTopic(topic)?.http ?? topic)} (kept by the server only while it runs).</p>
+    <input id="hpw" type="password" autocomplete="off" style="width:100%">`;
+  if (!await confirmDialog("Web password", body, "OK")) return;
+  const r = await jsonPost(`/api/devices/${encodeURIComponent(topic)}/http-password`, { password: $("hpw").value });
+  if (!r.ok) toast(r.text);
+  setTimeout(load, 800);
+}
+
 // ---------------------------------------------------------------- device tools
 function openTools(topic) {
   const d = byTopic(topic); if (!d) return;
@@ -1543,7 +1779,7 @@ function openTools(topic) {
   dlg.querySelector('[data-tool="options"]').disabled = !d.has_options;
   dlg.querySelectorAll("[data-tool]").forEach(b => b.onclick = () => {
     dlg.close();
-    ({ options: openOptions, wifi: openWifi, backup: backupDevice, restore: pickRestore, restart: restartDevice })[b.dataset.tool](topic);
+    ({ options: openOptions, wifi: openWifi, backup: backupDevice, restore: pickRestore, restart: restartDevice, ota: openOta })[b.dataset.tool](topic);
   });
   $("toolsClose").onclick = () => dlg.close();
   dlg.showModal();

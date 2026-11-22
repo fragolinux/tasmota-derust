@@ -18,3 +18,4 @@ tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 rustls-pki-types = { version = "1.16.0", features = ["std"] }
 ring = "0.17.14"
+open = "5.4.5"

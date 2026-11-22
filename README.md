@@ -80,12 +80,32 @@ GitHub the first time you open a SetOptions window. Nothing about you or your de
 
 - Connects to your MQTT broker and discovers Tasmota devices automatically
   (native `tasmota/discovery` messages, plus LWT-based discovery for older firmware).
-- One global device list with five views: **Home, Health, Firmware, Wifi, MQTT**.
+- One global device list with six views: **Dashboard, Home, Health, Firmware, Wifi, MQTT**.
+- **Dashboard**, the first view at every start: one card per device with big relay buttons,
+  the light's colour (a tap opens colour and brightness) and its main values (power and
+  temperature, or uptime). Choosing the values shown on the cards is planned.
+- **Group upgrades**: tick devices and upgrade them all at once. Each one upgrades on its own,
+  at the same time as the others; a failure stops only that device, and old firmware goes
+  through the upgrade path step after step by itself.
+- **Firmware server and highest version**, for every device (Settings) and per device (gear >
+  Firmware source, or the device sheet): your own OTA server as a URL with `{build}` (e.g.
+  `http://192.168.1.5/fw/{build}.bin.gz`, where `{build}` becomes `tasmota`,
+  `tasmota-sensors`, `tasmota32c3`…; its version can't be checked, so the upgrade installs
+  what it serves), or the official server with a highest version (e.g. `11.1.0`: upgrades stop
+  at that release, devices already there are left alone).
+- **Find devices on the network** (Find…): asks every address of the local network (or a
+  range you give) for its status over HTTP, read-only, and adds the Tasmota devices that are
+  not on MQTT to the list, marked **HTTP**: relays, console and status work over HTTP. Tick
+  them and **Enable MQTT** sends the broker settings in one Backlog (MQTT on, host, port, user,
+  password: the app's own by default); they restart and join MQTT, where their HTTP entry
+  gives way to the MQTT one. Devices with a web password ask for it (kept only in memory).
 - Relay buttons inline on each row: one click toggles the relay.
 - **Lights**: dimmable, CCT, RGB, RGBW and RGBCCT lights show their colour next to the relay
   buttons; a colour wheel and sliders set colour, brightness, white temperature and white
   (`HSBColor`, `Dimmer`, `CT`, `White`), each only when the light has it.
-- Show or hide devices that the broker knows about but that are currently offline.
+- Show or hide devices that the broker knows about but that are currently offline (hidden at
+  every start). An offline device has a ✕ in place of its gear: it is removed from the list
+  and from the broker (its retained messages), and every other open app drops it too.
 - **Just plugged in?** A device that started in the last 5 minutes (plugged in or restarted)
   gets a ★ next to its name and an amber row, on the desktop, the web page and Android. It goes
   by the device's uptime, so one that only reconnects (a Wi-Fi drop, a broker restart) is not
@@ -223,7 +243,12 @@ tasmota-derust-web                          # read-only: look, never switch or u
 tasmota-derust-web-rw                       # read-write: commands are sent to devices
 tasmota-derust-web --listen 127.0.0.1:8099  # local only (both take --listen)
 tasmota-derust-web-rw --https               # HTTPS on port 8443 (self-signed certificate)
+tasmota-derust-web --no-browser             # don't open the browser (also DERUST_NO_BROWSER=1)
 ```
+
+Started from a terminal on a computer with a screen, it opens the page in the default browser
+and prints the address (Ctrl-click it, Cmd-click on macOS). As a service or on a headless
+server it only prints the address.
 
 Each prints the address to open from other devices (this computer's network address, e.g.
 `http://192.168.1.20:8080`), its mode and whether a login is required. Both read the broker

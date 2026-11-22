@@ -12,6 +12,8 @@ import dev.derust.tasmota.core.Broker
 import dev.derust.tasmota.core.CommandException
 import dev.derust.tasmota.core.ConsoleLine
 import dev.derust.tasmota.core.Favourite
+import dev.derust.tasmota.core.MqttDefaults
+import dev.derust.tasmota.core.SettingsException
 import dev.derust.tasmota.core.Options
 import dev.derust.tasmota.core.Session
 import dev.derust.tasmota.core.Snapshot
@@ -95,8 +97,58 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     // Screen state, remembered between launches.
-    var view by mutableStateOf(prefs.view)
+    // Opens on the dashboard.
+    var view by mutableStateOf(View.Dashboard)
         private set
+
+    /** Ticking devices (group upgrade, Enable MQTT). */
+    var selecting by mutableStateOf(false)
+    var selected by mutableStateOf(setOf<String>())
+        private set
+
+    fun select(topic: String, on: Boolean) {
+        selected = if (on) selected + topic else selected - topic
+    }
+
+    fun selectAll(topics: List<String>) {
+        selected = selected + topics
+    }
+
+    fun stopSelecting() {
+        selecting = false
+        selected = emptySet()
+    }
+
+    private fun failures(list: List<dev.derust.tasmota.core.Failure>, ok: String) {
+        _messages.tryEmit(if (list.isEmpty()) ok else list.joinToString(" · ") { "${it.topic}: ${it.error}" })
+    }
+
+    /** Upgrades several devices at once, each on its own (path steps follow by themselves). */
+    fun upgradeMany(topics: List<String>) = command(null) { s ->
+        failures(s.upgradeMany(topics), "Upgrade started on ${topics.size} device(s)")
+    }
+
+    /** Connects HTTP-only devices to the broker; `password` null: this app's own. */
+    fun enableMqtt(topics: List<String>, host: String, port: Int, user: String, password: String?) = command(null) { s ->
+        failures(
+            s.enableMqtt(topics, host, port.toUShort(), user, password),
+            "MQTT settings sent: the devices restart and show up over MQTT",
+        )
+        stopSelecting()
+    }
+
+    /** Searches the network over HTTP (read-only): progress in the snapshot. */
+    fun search(range: String, password: String) = run(null) { s ->
+        try {
+            s.search(range, password.ifEmpty { null })
+        } catch (e: SettingsException) {
+            _messages.tryEmit(e.message ?: "Search refused")
+        }
+    }
+
+    fun setHttpPassword(topic: String, password: String) = run(null) { it.setHttpPassword(topic, password) }
+
+    fun mqttDefaults(): MqttDefaults? = runCatching { session.value?.mqttDefaults() }.getOrNull()
     var theme by mutableStateOf(prefs.theme)
         private set
 
@@ -105,7 +157,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         prefs.theme = t
     }
 
-    var showOffline by mutableStateOf(prefs.showOffline)
+    // Offline devices hidden at every start.
+    var showOffline by mutableStateOf(false)
         private set
     var sort by mutableStateOf(prefs.sort)
         private set
@@ -186,8 +239,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** A short hint that fades out by itself (Android toast), not in the way. */
+    private fun hint(text: String) {
+        android.widget.Toast.makeText(getApplication(), text, android.widget.Toast.LENGTH_SHORT).show()
+    }
+
     fun selectView(v: View) {
         view = v
+        if (v == View.Dashboard && showOffline) hint(DASHBOARD_ONLINE)
         prefs.view = v
         if (sort !in v.sorts) selectSort(SortKey.Name)
     }
@@ -200,7 +259,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleOffline() {
         showOffline = !showOffline
-        prefs.showOffline = showOffline
+        if (showOffline && view == View.Dashboard) hint(DASHBOARD_ONLINE)
     }
 
     fun selectSort(s: SortKey) {
@@ -329,6 +388,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val CONSOLE_MAX = 300
+        const val DASHBOARD_ONLINE = "The dashboard shows online devices only"
     }
 
     override fun onCleared() {
